@@ -1,0 +1,27 @@
+{
+  "id": "/",
+  "name": "Aura Wellness AI — Phytocare",
+  "short_name": "Phytocare",
+  "description": "Boutique bien-être et phytothérapie certifiée bio. Produits naturels, paiement sécurisé et conseils d'experts.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#145A32",
+  "categories": ["shopping", "health", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

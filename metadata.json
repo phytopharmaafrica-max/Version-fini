@@ -1,0 +1,6 @@
+{
+  "name": "Aura Wellness AI",
+  "description": "Plateforme bien-être et santé Aura Wellness AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
