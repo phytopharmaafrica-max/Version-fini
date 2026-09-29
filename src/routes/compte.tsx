@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/use-auth";
 import { formatPrice } from "@/lib/cart";
 import { toast } from "sonner";
 import { User, LogOut, Package, Share2, MessageCircle, ExternalLink, ShieldCheck } from "lucide-react";
-import { WHATSAPP_NUMBER } from "@/lib/whatsapp";
+import { buildWhatsAppSupportLink } from "@/lib/whatsapp";
 
 export const Route = createFileRoute("/compte")({
   head: () => ({ meta: [{ title: "Mon compte — Phytocare" }] }),
@@ -37,7 +37,31 @@ function AccountPage() {
       .order("created_at", { ascending: false })
       .then(({ data, error }: any) => {
         if (error) console.error(error);
-        setOrders(data ?? []);
+        const dbOrders = data ?? [];
+        try {
+          const rawLocal = localStorage.getItem("phyto_confirmed_orders");
+          if (rawLocal) {
+            const localOrders = JSON.parse(rawLocal);
+            const existingOrderNumbers = new Set(dbOrders.map((o: any) => String(o.order_number)));
+            const extra = localOrders
+              .filter((lo: any) => !existingOrderNumbers.has(String(lo.orderNumber)))
+              .map((lo: any) => ({
+                id: `local-${lo.orderNumber}`,
+                order_number: lo.orderNumber,
+                status: "pending",
+                total: lo.totalEur,
+                currency: lo.currencyCode || "EUR",
+                items: [{ name: `Commande #${lo.orderNumber} (${lo.itemsCount || 1} article(s))`, quantity: 1 }],
+                created_at: new Date().toISOString(),
+                customer_name: user.email,
+                customer_address: "",
+              }));
+            setOrders([...dbOrders, ...extra]);
+            setBusy(false);
+            return;
+          }
+        } catch {}
+        setOrders(dbOrders);
         setBusy(false);
       });
   }, [user, loading, navigate]);
@@ -108,12 +132,12 @@ function AccountPage() {
               <Share2 className="h-3.5 w-3.5 text-primary" /> Espace Parrainage
             </Link>
             <a
-              href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent("Bonjour, j'ai une question sur mon compte ou mes commandes Phytocare.")}`}
+              href={buildWhatsAppSupportLink("Bonjour, j'ai une question concernant mon compte client ou le suivi de mes commandes Phytocare.")}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-4 py-2 text-xs font-semibold text-foreground hover:bg-accent transition"
             >
-              <MessageCircle className="h-3.5 w-3.5 text-[#25D366]" /> Aide WhatsApp
+              <MessageCircle className="h-3.5 w-3.5 text-[#25D366]" /> Aide WhatsApp (Canal Sécurisé)
             </a>
             <button
               onClick={logout}
@@ -195,12 +219,12 @@ function AccountPage() {
                     </ul>
 
                     <a
-                      href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(`Bonjour, je souhaite avoir des nouvelles de ma commande #${o.order_number}.`)}`}
+                      href={buildWhatsAppSupportLink(`Bonjour, je souhaite avoir des nouvelles et le suivi de ma commande #${o.order_number}.`)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
                     >
-                      <MessageCircle className="h-3.5 w-3.5 text-[#25D366]" /> Suivre sur WhatsApp
+                      <MessageCircle className="h-3.5 w-3.5 text-[#25D366]" /> Suivre sur WhatsApp (Canal Sécurisé)
                     </a>
                   </div>
                 </div>

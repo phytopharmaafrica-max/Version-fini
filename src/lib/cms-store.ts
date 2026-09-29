@@ -147,8 +147,8 @@ export const DEFAULT_SITE_CONFIG: SiteConfig = {
 
   contact: {
     email: "contact@phytocare-wellness.com",
-    phone: "+33 1 89 71 42 00",
-    whatsapp: "+229 65 54 96 97",
+    phone: "Assistance Téléphonique Internationale",
+    whatsapp: "Canal Officiel Chiffré & Protégé",
     address: "Laboratoire Herboristerie & Expéditions Internationales — 12 Avenue des Sciences Naturelles, 75008 Paris",
     openingHours: "Lundi au Samedi : 8h30 - 19h30 (CET)",
   },
@@ -197,8 +197,8 @@ export const DEFAULT_SITE_CONFIG: SiteConfig = {
     },
     whatsapp: {
       enabled: true,
-      title: "Commande Assistée WhatsApp & Conseil Herboriste",
-      description: "Échangez directement avec notre herboriste pour valider votre panier et vos modalités de réception.",
+      title: "Paiement Sécurisé par WhatsApp",
+      description: "Validation prioritaire et règlement direct par WhatsApp via notre canal officiel sécurisé et masqué.",
     },
   },
 

@@ -19,6 +19,8 @@ import {
   ChevronRight,
   Globe,
   Coins,
+  ShoppingBag,
+  MapPin,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useCart, cart, cartTotal, formatPrice } from "@/lib/cart";
@@ -28,7 +30,9 @@ import { useCurrency } from "@/lib/currency";
 import { useI18n } from "@/lib/i18n";
 import { createOrder } from "@/lib/orders.functions";
 import { validatePromoCode } from "@/lib/promo.functions";
-import { buildWhatsAppOrderLink } from "@/lib/whatsapp";
+import { SEED_PROMOS, SEED_PRODUCTS } from "@/data/phytocare-seed";
+import { ProductCard } from "@/components/ProductCard";
+import { buildWhatsAppPaymentLink, buildWhatsAppSupportLink } from "@/lib/whatsapp";
 import { getStoredRef, clearStoredRef } from "@/lib/ref-tracking";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -36,13 +40,13 @@ export const Route = createFileRoute("/panier")({
   head: () => ({
     meta: [
       { title: "Panier & Règlement Sécurisé International — Phytocare" },
-      { name: "description", content: "Finalisez votre commande par virement IBAN, carte bancaire ou WhatsApp." },
+      { name: "description", content: "Finalisez votre commande en toute sécurité par WhatsApp, virement IBAN ou carte bancaire." },
     ],
   }),
   component: CartPage,
 });
 
-type PaymentMethodType = "card" | "iban" | "whatsapp";
+type PaymentMethodType = "whatsapp" | "card" | "iban";
 
 interface ConfirmedOrderInfo {
   orderNumber: string;
@@ -100,14 +104,17 @@ function CartPage() {
   const { currency, format: formatCurrency, convert } = useCurrency();
   const { t } = useI18n();
 
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>("card");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>("whatsapp");
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  // Form states
+  // Coordonnées de livraison (entièrement vierges par défaut pour saisie manuelle complète)
   const [form, setForm] = useState({
     name: "",
     email: "",
     phone: "",
+    country: "France",
+    city: "",
+    postalCode: "",
     address: "",
     notes: "",
   });
@@ -130,29 +137,43 @@ function CartPage() {
   const validatePromoFn = useServerFn(validatePromoCode);
   const ref = getStoredRef();
 
-  useEffect(() => {
-    if (user?.user_metadata?.full_name || user?.email) {
-      const name = user.user_metadata?.full_name || user.email?.split("@")[0] || "";
-      const email = user.email || "";
-      setForm((prev) => ({ ...prev, name: prev.name || name, email: prev.email || email }));
-      setCardForm((prev) => ({ ...prev, name: prev.name || name }));
-    }
-  }, [user]);
-
   const shippingCostEur = subtotal >= 50 ? 0 : 4.9;
   const totalEur = Math.max(0, subtotal - (promo?.discount ?? 0)) + shippingCostEur;
 
   const applyPromo = async () => {
-    if (!promoInput.trim()) return;
+    const rawCode = promoInput.trim().toUpperCase();
+    if (!rawCode) return;
     try {
-      const r = await validatePromoFn({ data: { code: promoInput, amount: subtotal } });
-      if (!r.valid) {
-        toast.error("Code promo invalide.");
+      let validCode = "";
+      let discountPercent = 10;
+
+      try {
+        const r = await validatePromoFn({ data: { code: rawCode, amount: subtotal } });
+        if (r && r.valid && r.code) {
+          validCode = r.code;
+          discountPercent = r.discount_percent || 10;
+        }
+      } catch {
+        // Fallback to local seed promos
+        const localMatch = SEED_PROMOS.find((p) => p.code.toUpperCase() === rawCode && p.active);
+        if (localMatch) {
+          if (localMatch.min_order_amount && subtotal < localMatch.min_order_amount) {
+            toast.error(`Montant minimum de commande de ${localMatch.min_order_amount} € requis pour ce code.`);
+            return;
+          }
+          validCode = localMatch.code;
+          discountPercent = localMatch.discount_percent;
+        }
+      }
+
+      if (!validCode) {
+        toast.error("Code promo invalide ou expiré.");
         return;
       }
-      const discountAmount = Math.round(((subtotal * (r.discount_percent || 10)) / 100) * 100) / 100;
-      setPromo({ code: r.code!, discount: discountAmount });
-      toast.success(`Code appliqué : -${formatPrice(discountAmount)}`);
+
+      const discountAmount = Math.round(((subtotal * discountPercent) / 100) * 100) / 100;
+      setPromo({ code: validCode, discount: discountAmount });
+      toast.success(`Code appliqué : -${formatPrice(discountAmount)} (-${discountPercent}%)`);
     } catch (e) {
       toast.error((e as Error).message || "Code invalide");
     }
@@ -174,7 +195,7 @@ function CartPage() {
     }
 
     if (!form.name.trim() || !form.phone.trim() || !form.address.trim()) {
-      toast.error("Veuillez remplir vos coordonnées de livraison.");
+      toast.error("Veuillez renseigner vos coordonnées de livraison.");
       return;
     }
 
@@ -183,6 +204,13 @@ function CartPage() {
       toast.error("Veuillez indiquer votre email de contact.");
       return;
     }
+
+    const fullFormattedAddress = [
+      form.address.trim(),
+      form.postalCode.trim() ? `${form.postalCode.trim()} ${form.city.trim()}` : form.city.trim(),
+      form.country.trim(),
+      form.notes.trim() ? `Instructions : ${form.notes.trim()}` : "",
+    ].filter(Boolean).join(", ");
 
     // Validation spécifique pour le paiement par carte bancaire
     if (paymentMethod === "card") {
@@ -221,11 +249,11 @@ function CartPage() {
         try {
           const order = await createOrderFn({
             data: {
-              customer_name: form.name,
-              customer_phone: form.phone,
-              customer_address: form.address,
+              customer_name: form.name.trim(),
+              customer_phone: form.phone.trim(),
+              customer_address: fullFormattedAddress,
               customer_email: customerEmail,
-              notes: form.notes,
+              notes: form.notes.trim() || null,
               promo_code: promo?.code ?? null,
               affiliate_code: ref ?? null,
               payment_method:
@@ -252,11 +280,11 @@ function CartPage() {
             .from("orders")
             .insert({
               user_id: user?.id || null,
-              customer_name: form.name,
-              customer_phone: form.phone,
-              customer_address: form.address,
+              customer_name: form.name.trim(),
+              customer_phone: form.phone.trim(),
+              customer_address: fullFormattedAddress,
               customer_email: customerEmail,
-              notes: form.notes || null,
+              notes: form.notes.trim() || null,
               items: orderItems,
               subtotal,
               discount: promo?.discount ?? 0,
@@ -281,21 +309,23 @@ function CartPage() {
 
       const bankRef = `${cms.bank.referencePrefix || "PHYTO"}-${orderNumber}`;
 
-      let waLink = "";
-      if (paymentMethod === "whatsapp" || paymentMethod === "iban") {
-        waLink = buildWhatsAppOrderLink({
-          orderNumber,
-          customerName: form.name,
-          phone: form.phone,
-          address: form.address,
-          items: items.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price })),
-          total: totalEur,
-          currency: currency === "EUR" ? "€" : `${currency} (${formatCurrency(totalEur)})`,
-          paymentMethod:
-            paymentMethod === "iban" ? `Virement IBAN (Réf: ${bankRef})` : "WhatsApp / Livraison",
-          targetNumber: cms.contact.whatsapp,
-        });
-      }
+      // Génération du lien de paiement sécurisé WhatsApp (transmis au numéro dédié aux paiements : +2290156313431)
+      const waLink = buildWhatsAppPaymentLink({
+        orderNumber,
+        customerName: form.name.trim(),
+        phone: form.phone.trim(),
+        address: fullFormattedAddress,
+        notes: form.notes.trim() || undefined,
+        items: items.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price })),
+        total: totalEur,
+        currency: currency === "EUR" ? "€" : `${currency} (${formatCurrency(totalEur)})`,
+        paymentMethod:
+          paymentMethod === "whatsapp"
+            ? "Règlement WhatsApp (Mobile Money, Virement instantané, Carte)"
+            : paymentMethod === "iban"
+            ? `Virement IBAN (Réf: ${bankRef})`
+            : "Carte Bancaire Sécurisée",
+      });
 
       const detectedBrand = getCardBrand(cardForm.number)?.name || "Carte Bancaire";
       const cleanNum = cardForm.number.replace(/\D/g, "");
@@ -369,18 +399,68 @@ function CartPage() {
               Commande N° {confirmedOrder.orderNumber} enregistrée
             </span>
             <h1 className="font-display text-2xl md:text-3xl font-bold text-navy">
-              {confirmedOrder.paymentMethod === "iban"
+              {confirmedOrder.paymentMethod === "whatsapp"
+                ? "Commande & Règlement WhatsApp"
+                : confirmedOrder.paymentMethod === "iban"
                 ? "Coordonnées de virement bancaire (IBAN)"
-                : confirmedOrder.paymentMethod === "card"
-                ? "Paiement par carte validé !"
-                : "Confirmation de votre commande"}
+                : "Paiement par carte validé !"}
             </h1>
             <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              {confirmedOrder.paymentMethod === "iban"
+              {confirmedOrder.paymentMethod === "whatsapp"
+                ? "Votre commande est enregistrée avec succès ! Transmettez votre règlement sur notre canal WhatsApp officiel sécurisé pour déclencher l'expédition prioritaire."
+                : confirmedOrder.paymentMethod === "iban"
                 ? "Veuillez effectuer votre virement bancaire en utilisant les coordonnées ci-dessous pour lancer immédiatement la préparation de votre colis."
                 : "Merci pour votre confiance ! Votre paiement par carte bancaire a été validé avec succès par notre passerelle sécurisée."}
             </p>
           </div>
+
+          {/* DÉTAILS RÈGLEMENT WHATSAPP (CANAL SÉCURISÉ MASQUÉ) */}
+          {confirmedOrder.paymentMethod === "whatsapp" && (
+            <div className="rounded-3xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 p-6 space-y-4 text-left">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-emerald-200 dark:border-emerald-800 pb-3 gap-2">
+                <div className="flex items-center gap-2 text-emerald-900 dark:text-emerald-200 font-bold text-sm">
+                  <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Passerelle de Paiement WhatsApp Sécurisée</span>
+                </div>
+                <span className="rounded-full bg-emerald-100 dark:bg-emerald-900/60 px-3 py-1 text-xs font-bold text-emerald-800 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700">
+                  Canal Chiffré & Vérifié
+                </span>
+              </div>
+
+              <div className="space-y-2.5 text-xs md:text-sm">
+                <div className="flex justify-between items-center rounded-xl bg-white dark:bg-slate-900 p-3.5 border border-emerald-100 dark:border-slate-800 shadow-2xs">
+                  <span className="text-muted-foreground font-medium">Référence commande :</span>
+                  <span className="font-mono font-bold text-emerald-900 dark:text-emerald-200 text-sm">
+                    #{confirmedOrder.orderNumber}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center rounded-xl bg-white dark:bg-slate-900 p-3.5 border border-emerald-100 dark:border-slate-800 shadow-2xs">
+                  <span className="text-muted-foreground font-medium">Montant total à régler :</span>
+                  <div className="text-right">
+                    <span className="font-bold text-emerald-950 dark:text-emerald-100 text-base block">
+                      {confirmedOrder.totalConverted}
+                    </span>
+                    {confirmedOrder.currencyCode !== "EUR" && (
+                      <span className="text-xs text-muted-foreground">({confirmedOrder.totalEur.toFixed(2)} €)</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex justify-between items-center rounded-xl bg-white dark:bg-slate-900 p-3.5 border border-emerald-100 dark:border-slate-800 shadow-2xs">
+                  <span className="text-muted-foreground font-medium">Protection du numéro :</span>
+                  <span className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5 text-xs">
+                    <Lock className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                    Numéro de paiement officiel masqué & chiffré
+                  </span>
+                </div>
+                <div className="rounded-xl bg-emerald-100/70 dark:bg-emerald-950/40 p-3 border border-emerald-200 dark:border-emerald-800/60 text-xs text-emerald-900 dark:text-emerald-200 space-y-1">
+                  <p className="font-semibold">Modes de versement acceptés sur WhatsApp :</p>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Mobile Money (MTN MoMo, Moov Money, Orange Money, Wave), Virement bancaire instantané ou Lien sécurisé Carte.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* DÉTAILS VIREMENT BANCAIRE */}
           {confirmedOrder.paymentMethod === "iban" && confirmedOrder.ibanDetails && (
@@ -528,14 +608,28 @@ function CartPage() {
                 className="inline-flex w-full items-center justify-center gap-2.5 rounded-full bg-[#25D366] px-6 py-3.5 text-sm font-bold text-white shadow-md transition hover:bg-[#20bd5a] hover:scale-[1.01]"
               >
                 <MessageCircle className="h-5 w-5" />
-                Envoyer la confirmation sur WhatsApp
+                {confirmedOrder.paymentMethod === "whatsapp"
+                  ? "Transmettre et Valider mon Règlement sur WhatsApp"
+                  : "Transmettre la confirmation sur WhatsApp"}
               </a>
             )}
+
+            <a
+              href={buildWhatsAppSupportLink(
+                `Bonjour, je sollicite une assistance au sujet de ma commande #${confirmedOrder.orderNumber}.`
+              )}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-border bg-white dark:bg-slate-900 py-3 text-xs font-semibold text-foreground hover:bg-slate-100 dark:hover:bg-slate-800 transition shadow-xs"
+            >
+              <MessageCircle className="h-4 w-4 text-[#25D366]" />
+              Besoin d'aide ? Contacter l'Assistance / Conseiller (Canal Protégé)
+            </a>
 
             <button
               type="button"
               onClick={() => window.print()}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-border bg-white dark:bg-slate-900 py-3 text-xs font-semibold text-foreground hover:bg-slate-100 dark:hover:bg-slate-800 transition shadow-xs"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-border bg-white dark:bg-slate-900 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-slate-100 dark:hover:bg-slate-800 transition shadow-xs"
             >
               <Printer className="h-4 w-4 text-muted-foreground" /> Imprimer le reçu officiel & justificatif
             </button>
@@ -557,22 +651,89 @@ function CartPage() {
   // PANIER VIDE
   if (items.length === 0) {
     return (
-      <div className="container-page py-20 text-center max-w-md mx-auto space-y-4">
-        <h1 className="font-display text-3xl font-extrabold text-navy">Votre panier est vide</h1>
-        <p className="text-sm text-muted-foreground">
-          Découvrez notre gamme de remèdes naturels formulés par des experts et commencez votre cure dès aujourd'hui.
-        </p>
-        <Link to="/produits" className="btn-hero mt-4 inline-flex">
-          Explorer la boutique
-        </Link>
+      <div className="container-page py-10 sm:py-16 space-y-12">
+        <div className="max-w-xl mx-auto rounded-3xl border border-border bg-white dark:bg-slate-900 p-8 sm:p-12 text-center shadow-sm space-y-4">
+          <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-mint text-primary">
+            <ShoppingBag className="h-8 w-8" />
+          </div>
+          <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-navy">
+            Votre panier est vide
+          </h1>
+          <p className="text-sm text-muted-foreground leading-relaxed max-w-md mx-auto">
+            Vous n'avez pas encore ajouté de produit à votre panier. Découvrez nos remèdes naturels certifiés et profitez de notre expédition soignée.
+          </p>
+          <div className="pt-2 flex flex-wrap justify-center gap-3">
+            <Link to="/produits" className="btn-hero inline-flex">
+              Explorer tous nos produits
+            </Link>
+            <Link
+              to="/category/$slug"
+              params={{ slug: "immunite" }}
+              className="inline-flex items-center justify-center rounded-full border border-border bg-background px-5 py-2.5 text-xs font-semibold text-foreground hover:bg-accent transition"
+            >
+              Gamme Immunité
+            </Link>
+          </div>
+        </div>
+
+        {/* Section de suggestions de produits populaires */}
+        <div className="space-y-6 pt-4">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 border-b border-border pb-4">
+            <div>
+              <span className="text-xs font-semibold text-primary uppercase tracking-wider">
+                Nos essentiels
+              </span>
+              <h2 className="font-display text-xl sm:text-2xl font-bold text-navy">
+                Produits recommandés par nos herboristes
+              </h2>
+            </div>
+            <Link
+              to="/produits"
+              className="text-xs sm:text-sm font-semibold text-primary hover:underline inline-flex items-center gap-1"
+            >
+              Voir tout le catalogue <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
+            {SEED_PRODUCTS.filter((p) => p.featured || p.stock > 0).slice(0, 4).map((p) => (
+              <ProductCard
+                key={p.id}
+                product={{
+                  ...p,
+                  badge: p.badge || null,
+                  price: Number(p.price),
+                  rating: Number(p.rating || 5),
+                }}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="container-page grid gap-8 py-10 lg:grid-cols-[1fr_430px]">
-      {/* COLONNE GAUCHE : LISTE DES ARTICLES DU PANIER */}
-      <div>
+    <div className="container-page py-6 sm:py-10 space-y-6 w-full min-w-0 max-w-full overflow-x-hidden">
+      {/* En-tête de page sécurisé */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/70 pb-4">
+        <div>
+          <h1 className="font-display text-2xl sm:text-3xl font-extrabold text-navy">
+            Mon panier & Commande sécurisée
+          </h1>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+            {items.length} article{items.length > 1 ? "s" : ""} sélectionné{items.length > 1 ? "s" : ""} • Règlement WhatsApp, Carte Bancaire ou Virement IBAN
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs font-semibold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 px-3.5 py-1.5 rounded-full w-fit">
+          <ShieldCheck className="h-4 w-4 text-emerald-600" />
+          <span>Transactions chiffrées SSL 256-bit</span>
+        </div>
+      </div>
+
+      <div className="grid gap-6 sm:gap-8 lg:grid-cols-[1fr_420px] xl:grid-cols-[1fr_440px] items-start w-full min-w-0 max-w-full">
+        {/* COLONNE GAUCHE : LISTE DES ARTICLES DU PANIER */}
+        <div className="w-full min-w-0 max-w-full">
         <div className="flex items-center justify-between mb-6">
           <h1 className="font-display text-2xl md:text-3xl font-extrabold text-navy">Mon panier</h1>
           <span className="text-xs font-semibold text-muted-foreground">
@@ -582,42 +743,42 @@ function CartPage() {
 
         <ul className="divide-y divide-border rounded-3xl border border-border bg-white dark:bg-slate-900 shadow-md overflow-hidden">
           {items.map((i) => (
-            <li key={i.id} className="flex items-center gap-4 p-4 md:p-5">
-              <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-mint/50 border border-border/60">
+            <li key={i.id} className="flex items-center gap-3 sm:gap-4 p-3 sm:p-4 md:p-5">
+              <div className="h-14 w-14 sm:h-20 sm:w-20 shrink-0 overflow-hidden rounded-xl sm:rounded-2xl bg-mint/50 border border-border/60">
                 {i.image_url && <img src={i.image_url} alt="" className="h-full w-full object-cover" />}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="truncate font-display font-semibold text-navy text-sm md:text-base">{i.name}</p>
-                <p className="text-xs md:text-sm text-primary font-bold">{formatPrice(i.price)}</p>
-                <div className="mt-2 inline-flex items-center rounded-full border border-border text-xs bg-slate-50 dark:bg-slate-800">
+                <p className="truncate font-display font-semibold text-navy text-xs sm:text-base">{i.name}</p>
+                <p className="text-xs sm:text-sm text-primary font-bold">{formatPrice(i.price)}</p>
+                <div className="mt-1.5 sm:mt-2 inline-flex items-center rounded-full border border-border text-xs bg-slate-50 dark:bg-slate-800">
                   <button
                     type="button"
                     onClick={() => cart.setQty(i.id, i.quantity - 1)}
-                    className="h-7 w-7 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-l-full flex items-center justify-center font-bold"
+                    className="h-6 w-6 sm:h-7 sm:w-7 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-l-full flex items-center justify-center font-bold"
                   >
                     −
                   </button>
-                  <span className="w-7 text-center font-semibold">{i.quantity}</span>
+                  <span className="w-6 sm:w-7 text-center font-semibold text-xs sm:text-sm">{i.quantity}</span>
                   <button
                     type="button"
                     onClick={() => cart.setQty(i.id, i.quantity + 1)}
-                    className="h-7 w-7 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-r-full flex items-center justify-center font-bold"
+                    className="h-6 w-6 sm:h-7 sm:w-7 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-r-full flex items-center justify-center font-bold"
                   >
                     +
                   </button>
                 </div>
               </div>
-              <div className="text-right">
-                <p className="font-display font-bold text-navy text-sm md:text-base">
+              <div className="text-right shrink-0">
+                <p className="font-display font-bold text-navy text-xs sm:text-base">
                   {formatPrice(i.price * i.quantity)}
                 </p>
                 <button
                   type="button"
                   onClick={() => cart.remove(i.id)}
                   aria-label="Retirer"
-                  className="mt-2 text-muted-foreground hover:text-destructive transition p-1"
+                  className="mt-1 sm:mt-2 text-muted-foreground hover:text-destructive transition p-1"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <Trash2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                 </button>
               </div>
             </li>
@@ -651,46 +812,46 @@ function CartPage() {
       </div>
 
       {/* COLONNE DROITE : FORMULAIRE DE COMMANDE ET MOYENS DE PAIEMENT */}
-      <aside className="h-fit rounded-3xl border border-border bg-white dark:bg-slate-900 p-6 md:p-7 shadow-md space-y-5">
-        <h2 className="font-display text-xl font-bold text-navy">Règlement de la commande</h2>
+      <aside className="h-fit rounded-2xl sm:rounded-3xl border border-border bg-white dark:bg-slate-900 p-3.5 sm:p-6 md:p-7 shadow-md space-y-5 w-full min-w-0 max-w-full overflow-hidden">
+        <h2 className="font-display text-lg sm:text-xl font-bold text-navy">Règlement de la commande</h2>
 
         {/* Code promo */}
-        <div className="rounded-2xl border border-dashed border-border p-3.5 bg-slate-50 dark:bg-slate-800/60">
+        <div className="rounded-2xl border border-dashed border-border p-3 sm:p-3.5 bg-slate-50 dark:bg-slate-800/60 w-full min-w-0">
           {promo ? (
-            <div className="flex items-center justify-between">
-              <span className="inline-flex items-center gap-2 text-xs font-semibold text-primary">
-                <Tag className="h-4 w-4" /> {promo.code} (-{formatPrice(promo.discount, "EUR")})
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-2 text-xs font-semibold text-primary truncate">
+                <Tag className="h-4 w-4 shrink-0" /> {promo.code} (-{formatPrice(promo.discount, "EUR")})
               </span>
-              <button onClick={() => setPromo(null)} className="text-muted-foreground hover:text-destructive">
+              <button onClick={() => setPromo(null)} className="text-muted-foreground hover:text-destructive shrink-0">
                 <X className="h-4 w-4" />
               </button>
             </div>
           ) : (
-            <div className="flex gap-2">
+            <div className="flex gap-2 w-full min-w-0">
               <input
                 value={promoInput}
                 onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
                 placeholder="Code de réduction"
-                className="flex-1 rounded-xl border border-border bg-white dark:bg-slate-900 px-3 py-2 text-xs outline-none focus:border-primary"
+                className="flex-1 min-w-0 rounded-xl border border-border bg-white dark:bg-slate-900 px-3 py-2 text-xs outline-none focus:border-primary"
               />
               <button
                 type="button"
                 onClick={applyPromo}
-                className="rounded-xl bg-primary px-3 text-xs font-bold text-primary-foreground hover:brightness-110"
+                className="rounded-xl bg-primary px-3 text-xs font-bold text-primary-foreground hover:brightness-110 shrink-0"
               >
                 Appliquer
               </button>
             </div>
           )}
           {ref && (
-            <p className="mt-2 text-[11px] text-muted-foreground">
+            <p className="mt-2 text-[11px] text-muted-foreground break-words">
               Code partenaire affilié : <strong>{ref}</strong>
             </p>
           )}
         </div>
 
         {/* Récapitulatif montants */}
-        <div className="space-y-2 text-xs md:text-sm">
+        <div className="space-y-2 text-xs md:text-sm w-full min-w-0">
           <div className="flex items-center justify-between text-muted-foreground">
             <span>{t("cart.subtotal", "Sous-total")}</span>
             <span className="font-semibold text-foreground">{formatCurrency(subtotal)}</span>
@@ -716,7 +877,7 @@ function CartPage() {
                 </span>
               )}
             </div>
-            <span className="font-display text-2xl font-bold text-primary">
+            <span className="font-display text-xl sm:text-2xl font-bold text-primary">
               {formatCurrency(totalEur)}
             </span>
           </div>
@@ -724,11 +885,11 @@ function CartPage() {
 
         {/* Message d'information pour visiteur non connecté */}
         {!loading && !user && (
-          <div className="rounded-2xl bg-emerald-50/60 dark:bg-slate-800/90 border border-emerald-200 dark:border-slate-700 p-3.5 text-xs text-foreground space-y-1">
+          <div className="rounded-2xl bg-emerald-50/60 dark:bg-slate-800/90 border border-emerald-200 dark:border-slate-700 p-3 sm:p-3.5 text-xs text-foreground space-y-1 w-full min-w-0">
             <p className="font-bold text-navy flex items-center gap-1.5">
               <span>👤 Commande rapide & sécurisée</span>
             </p>
-            <p className="text-muted-foreground text-[11px]">
+            <p className="text-muted-foreground text-[11px] break-words leading-relaxed">
               Vous pouvez commander directement en renseignant vos coordonnées de livraison, ou vous{" "}
               <Link to="/auth" search={{ redirect: "/panier" }} className="font-bold text-primary underline">
                 connecter avec votre compte Google
@@ -738,28 +899,92 @@ function CartPage() {
           </div>
         )}
 
-        <form onSubmit={checkout} className="space-y-4">
+        <form onSubmit={checkout} className="space-y-4 w-full min-w-0 max-w-full">
           {/* SÉLECTION DU MOYEN DE PAIEMENT */}
-          <div className="space-y-2.5">
+          <div className="space-y-2.5 w-full min-w-0">
             <label className="block text-xs font-bold text-navy">Moyen de paiement sécurisé</label>
 
-            {/* OPTION 1 : CARTE BANCAIRE INTERNATIONALE (PAR DÉFAUT) */}
+            {/* OPTION 1 : PAIEMENT WHATSAPP SÉCURISÉ (RECOMMANDÉ PAR DÉFAUT) */}
+            <div
+              onClick={() => setPaymentMethod("whatsapp")}
+              className={`cursor-pointer rounded-2xl border p-3 sm:p-3.5 transition w-full min-w-0 max-w-full overflow-hidden ${
+                paymentMethod === "whatsapp"
+                  ? "border-primary bg-emerald-50/50 dark:bg-emerald-950/30 ring-2 ring-primary/40 shadow-xs"
+                  : "border-border bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800"
+              }`}
+            >
+              <div className="flex items-start sm:items-center justify-between gap-2 min-w-0 w-full">
+                <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
+                  <div className="grid h-8 w-8 sm:h-9 sm:w-9 place-items-center rounded-xl bg-[#25D366]/15 text-[#25D366] shrink-0 mt-0.5 sm:mt-0">
+                    <MessageCircle className="h-4 w-4 sm:h-5 sm:w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p className="font-bold text-xs text-navy">Paiement Sécurisé par WhatsApp</p>
+                      <span className="rounded-full bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 text-[10px] font-bold text-emerald-800 dark:text-emerald-200 shrink-0">
+                        Recommandé
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground break-words leading-tight mt-0.5">
+                      Transmission chiffrée & règlement direct avec notre service financier
+                    </p>
+                  </div>
+                </div>
+                <input
+                  type="radio"
+                  name="payment"
+                  checked={paymentMethod === "whatsapp"}
+                  onChange={() => setPaymentMethod("whatsapp")}
+                  className="accent-primary h-4 w-4 shrink-0 mt-1 sm:mt-0"
+                />
+              </div>
+
+              {paymentMethod === "whatsapp" && (
+                <div className="mt-3.5 border-t border-primary/20 pt-3 space-y-2.5 text-[11px] w-full min-w-0" onClick={(e) => e.stopPropagation()}>
+                  <div className="rounded-xl bg-white dark:bg-slate-900 p-3 border border-emerald-200/70 dark:border-emerald-900/60 space-y-2 shadow-2xs w-full min-w-0">
+                    <div className="flex items-center gap-1.5 font-bold text-emerald-900 dark:text-emerald-200">
+                      <Lock className="h-4 w-4 text-emerald-600 shrink-0" />
+                      <span>Passerelle WhatsApp Chiffrée de Bout en Bout</span>
+                    </div>
+                    <p className="text-muted-foreground text-[11px] leading-relaxed break-words">
+                      Dès validation de votre commande, le récapitulatif complet et la demande de règlement sont automatiquement transmis à notre responsable financier sur notre canal WhatsApp officiel.
+                    </p>
+                    <div className="pt-1 border-t border-border space-y-1">
+                      <p className="font-semibold text-foreground text-[11px]">Modes acceptés sur le canal WhatsApp :</p>
+                      <p className="text-muted-foreground text-[11px] leading-relaxed">
+                        • Mobile Money (MTN MoMo, Moov Money, Wave, Orange Money)<br />
+                        • Virement bancaire instantané ou lien de paiement Carte sécurisé
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] text-muted-foreground flex items-center gap-1.5 leading-relaxed break-words">
+                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                    <span>Sécurité renforcée : Les numéros officiels de paiement et de consultation sont strictement masqués et protégés contre toute tentative d'usurpation.</span>
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* OPTION 2 : CARTE BANCAIRE INTERNATIONALE */}
             <div
               onClick={() => setPaymentMethod("card")}
-              className={`cursor-pointer rounded-2xl border p-3.5 transition ${
+              className={`cursor-pointer rounded-2xl border p-3 sm:p-3.5 transition w-full min-w-0 max-w-full overflow-hidden ${
                 paymentMethod === "card"
                   ? "border-primary bg-emerald-50/40 dark:bg-emerald-950/20 ring-1 ring-primary"
                   : "border-border bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800"
               }`}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="grid h-8 w-8 place-items-center rounded-lg bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
+              <div className="flex items-start sm:items-center justify-between gap-2 min-w-0 w-full">
+                <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
+                  <div className="grid h-8 w-8 place-items-center rounded-lg bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 shrink-0 mt-0.5 sm:mt-0">
                     <CreditCard className="h-4 w-4" />
                   </div>
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className="font-bold text-xs text-navy">Carte Bancaire (Visa, CB, Mastercard)</p>
-                    <p className="text-[11px] text-muted-foreground">Paiement international sécurisé 3D-Secure 2.2</p>
+                    <p className="text-[11px] text-muted-foreground break-words leading-tight mt-0.5">
+                      Paiement international sécurisé 3D-Secure 2.2
+                    </p>
                   </div>
                 </div>
                 <input
@@ -767,16 +992,16 @@ function CartPage() {
                   name="payment"
                   checked={paymentMethod === "card"}
                   onChange={() => setPaymentMethod("card")}
-                  className="accent-primary"
+                  className="accent-primary h-4 w-4 shrink-0 mt-1 sm:mt-0"
                 />
               </div>
 
               {paymentMethod === "card" && (
-                <div className="mt-3.5 border-t border-primary/20 pt-3.5 space-y-3" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center justify-between text-[11px] bg-white dark:bg-slate-900 rounded-xl p-2.5 border border-border">
+                <div className="mt-3.5 border-t border-primary/20 pt-3.5 space-y-3 w-full min-w-0" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px] bg-white dark:bg-slate-900 rounded-xl p-2.5 border border-border">
                     <div className="flex items-center gap-1.5 font-bold text-navy dark:text-slate-100">
                       <Lock className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>Passerelle de Paiement Sécurisée</span>
+                      <span>Passerelle Sécurisée</span>
                     </div>
                     <div className="flex items-center gap-1 text-[10px] font-semibold">
                       <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border text-[9px] font-bold">VISA</span>
@@ -790,7 +1015,7 @@ function CartPage() {
                     <label className="block text-[11px] font-semibold text-foreground mb-1">
                       Numéro de carte bancaire
                     </label>
-                    <div className="relative">
+                    <div className="relative w-full min-w-0">
                       <input
                         type="text"
                         required
@@ -798,7 +1023,7 @@ function CartPage() {
                         value={cardForm.number}
                         onChange={(e) => setCardForm({ ...cardForm, number: formatCardNumber(e.target.value) })}
                         maxLength={19}
-                        className="w-full rounded-xl border border-border bg-white dark:bg-slate-950 px-3.5 py-2 text-xs font-mono outline-none focus:border-primary pr-16 text-foreground"
+                        className="w-full rounded-xl border border-border bg-white dark:bg-slate-950 px-3 py-2 text-xs font-mono outline-none focus:border-primary pr-14 text-foreground"
                       />
                       {getCardBrand(cardForm.number) && (
                         <span
@@ -822,11 +1047,11 @@ function CartPage() {
                       placeholder="Prénom et Nom du titulaire"
                       value={cardForm.name}
                       onChange={(e) => setCardForm({ ...cardForm, name: e.target.value.toUpperCase() })}
-                      className="w-full rounded-xl border border-border bg-white dark:bg-slate-950 px-3.5 py-2 text-xs uppercase outline-none focus:border-primary text-foreground"
+                      className="w-full rounded-xl border border-border bg-white dark:bg-slate-950 px-3 py-2 text-xs uppercase outline-none focus:border-primary text-foreground"
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-[11px] font-semibold text-foreground mb-1">Expiration</label>
                       <input
@@ -836,7 +1061,7 @@ function CartPage() {
                         value={cardForm.expiry}
                         onChange={(e) => setCardForm({ ...cardForm, expiry: formatCardExpiry(e.target.value) })}
                         maxLength={5}
-                        className="w-full rounded-xl border border-border bg-white dark:bg-slate-950 px-3.5 py-2 text-xs font-mono outline-none focus:border-primary text-foreground"
+                        className="w-full rounded-xl border border-border bg-white dark:bg-slate-950 px-3 py-2 text-xs font-mono outline-none focus:border-primary text-foreground"
                       />
                     </div>
                     <div>
@@ -851,38 +1076,38 @@ function CartPage() {
                             setCardForm({ ...cardForm, cvc: e.target.value.replace(/\D/g, "").slice(0, 4) })
                           }
                           maxLength={4}
-                          className="w-full rounded-xl border border-border bg-white dark:bg-slate-950 px-3.5 py-2 text-xs font-mono outline-none focus:border-primary pr-8 text-foreground"
+                          className="w-full rounded-xl border border-border bg-white dark:bg-slate-950 px-3 py-2 text-xs font-mono outline-none focus:border-primary pr-7 text-foreground"
                         />
-                        <Lock className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground opacity-50" />
+                        <Lock className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground opacity-50" />
                       </div>
                     </div>
                   </div>
 
-                  <p className="text-[10px] text-muted-foreground flex items-center gap-1.5 pt-1">
+                  <p className="text-[10px] text-muted-foreground flex items-center gap-1.5 pt-1 break-words">
                     <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                    <span>Chiffrement SSL 256-bit • Protocole 3D-Secure • Conforme norme bancaire PCI-DSS</span>
+                    <span>Chiffrement SSL 256-bit • 3D-Secure • Norme bancaire PCI-DSS</span>
                   </p>
                 </div>
               )}
             </div>
 
-            {/* OPTION 2 : VIREMENT BANCAIRE PROTÉGÉ */}
+            {/* OPTION 3 : VIREMENT BANCAIRE PROTÉGÉ */}
             <div
               onClick={() => setPaymentMethod("iban")}
-              className={`cursor-pointer rounded-2xl border p-3.5 transition ${
+              className={`cursor-pointer rounded-2xl border p-3 sm:p-3.5 transition w-full min-w-0 max-w-full overflow-hidden ${
                 paymentMethod === "iban"
                   ? "border-primary bg-emerald-50/40 dark:bg-emerald-950/20 ring-1 ring-primary"
                   : "border-border bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800"
               }`}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+              <div className="flex items-start sm:items-center justify-between gap-2 min-w-0 w-full">
+                <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
+                  <div className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 shrink-0 mt-0.5 sm:mt-0">
                     <Building2 className="h-4 w-4" />
                   </div>
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className="font-bold text-xs text-navy">Virement Bancaire (SEPA / International)</p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-[11px] text-muted-foreground break-words leading-tight mt-0.5">
                       Compte professionnel vérifié & protégé contre la fraude
                     </p>
                   </div>
@@ -892,117 +1117,184 @@ function CartPage() {
                   name="payment"
                   checked={paymentMethod === "iban"}
                   onChange={() => setPaymentMethod("iban")}
-                  className="accent-primary"
+                  className="accent-primary h-4 w-4 shrink-0 mt-1 sm:mt-0"
                 />
               </div>
 
               {paymentMethod === "iban" && (
-                <div className="mt-3.5 border-t border-primary/20 pt-2.5 text-[11px] text-foreground space-y-2">
-                  <div className="rounded-xl bg-white dark:bg-slate-900 p-3 border border-border space-y-1.5">
+                <div className="mt-3.5 border-t border-primary/20 pt-2.5 text-[11px] text-foreground space-y-2 w-full min-w-0" onClick={(e) => e.stopPropagation()}>
+                  <div className="rounded-xl bg-white dark:bg-slate-900 p-3 border border-border space-y-1.5 w-full min-w-0">
                     <div className="flex items-center gap-1.5 font-bold text-navy dark:text-slate-100">
                       <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0" />
                       <span>Coordonnées bancaires protégées</span>
                     </div>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-[11px] text-muted-foreground break-words">
                       Bénéficiaire : <strong className="text-foreground">{cms.bank.accountHolder}</strong>
                     </p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-[11px] text-muted-foreground break-words">
                       Établissement : <strong className="text-foreground">{cms.bank.bankName}</strong>
                     </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      IBAN officiel vérifié :{" "}
-                      <code className="font-mono font-bold text-foreground">
+                    <p className="text-[11px] text-muted-foreground break-words flex flex-wrap items-center gap-1">
+                      <span>IBAN officiel vérifié :</span>{" "}
+                      <code className="font-mono font-bold text-foreground text-xs break-all">
                         FR76 •••• •••• •••• •••• {cms.bank.iban ? cms.bank.iban.replace(/\s+/g, "").slice(-4) : "4589"}
                       </code>
                     </p>
                   </div>
 
-                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  <p className="text-[10px] text-muted-foreground leading-relaxed break-words">
                     🔒 <strong>Protection des coordonnées :</strong> Par mesure de sécurité et de conformité financière, l'IBAN officiel complet, le code BIC/SWIFT et votre référence d'ordre unique vous sont délivrés confidentiellement sur votre reçu dès validation de ce panier ci-dessous.
                   </p>
                 </div>
               )}
             </div>
-
-            {/* OPTION 3 : WHATSAPP */}
-            <div
-              onClick={() => setPaymentMethod("whatsapp")}
-              className={`cursor-pointer rounded-2xl border p-3.5 transition ${
-                paymentMethod === "whatsapp"
-                  ? "border-primary bg-emerald-50/40 dark:bg-emerald-950/20 ring-1 ring-primary"
-                  : "border-border bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-800">
-                    <MessageCircle className="h-4 w-4 text-[#25D366]" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-xs text-navy">Commande assistée WhatsApp</p>
-                    <p className="text-[11px] text-muted-foreground">Conseils directs avec nos experts & livraison</p>
-                  </div>
-                </div>
-                <input
-                  type="radio"
-                  name="payment"
-                  checked={paymentMethod === "whatsapp"}
-                  onChange={() => setPaymentMethod("whatsapp")}
-                  className="accent-primary"
-                />
-              </div>
-            </div>
           </div>
 
-          {/* COORDONNÉES DE LIVRAISON */}
-          <div className="space-y-2.5 pt-3 border-t border-border">
-            <label className="block text-xs font-bold text-navy">Coordonnées de livraison</label>
+          {/* COORDONNÉES DE LIVRAISON - SECTION DÉPLIÉE EN ENTIER AVEC TOUTES SES CASES */}
+          <div className="space-y-4 pt-4 border-t border-border w-full min-w-0">
             <div>
-              <input
-                required
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Nom et prénom complet"
-                className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground"
-              />
+              <h3 className="text-sm font-bold text-navy flex items-center gap-1.5">
+                <MapPin className="h-4 w-4 text-primary shrink-0" />
+                <span>Coordonnées de livraison</span>
+              </h3>
+              <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
+                Toutes les cases ci-dessous sont à renseigner par l'acheteur pour assurer l'expédition conforme de votre colis.
+              </p>
             </div>
-            <div>
-              <input
-                required
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-                placeholder="Adresse email (pour la confirmation & suivi)"
-                className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground"
-              />
-            </div>
-            <div>
-              <input
-                required
-                type="tel"
-                value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                placeholder="Numéro de téléphone (avec indicatif pays)"
-                className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground"
-              />
-            </div>
-            <div>
-              <textarea
-                required
-                rows={2}
-                value={form.address}
-                onChange={(e) => setForm({ ...form, address: e.target.value })}
-                placeholder="Adresse complète de livraison (Rue, Ville, Code Postal, Pays)"
-                className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground"
-              />
-            </div>
-            <div>
-              <input
-                value={form.notes}
-                onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                placeholder="Instructions particulières de livraison (optionnel)"
-                className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground"
-              />
+
+            <div className="space-y-3 rounded-2xl bg-slate-50/70 dark:bg-slate-800/40 p-3.5 sm:p-4 border border-border w-full min-w-0">
+              {/* Nom & Prénom */}
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Nom et prénom du destinataire <span className="text-destructive">*</span>
+                </label>
+                <input
+                  required
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="Ex : Jean Dupont"
+                  className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2.5 text-xs outline-none focus:border-primary text-foreground box-border transition"
+                />
+              </div>
+
+              {/* Email */}
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Adresse e-mail (pour confirmation & suivi du colis) <span className="text-destructive">*</span>
+                </label>
+                <input
+                  required
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  placeholder="Ex : jean.dupont@email.com"
+                  className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2.5 text-xs outline-none focus:border-primary text-foreground box-border transition"
+                />
+              </div>
+
+              {/* Téléphone / WhatsApp */}
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Numéro de téléphone / WhatsApp (avec indicatif) <span className="text-destructive">*</span>
+                </label>
+                <input
+                  required
+                  type="tel"
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  placeholder="Ex : +33 6 12 34 56 78 ou +229 97 00 00 00"
+                  className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2.5 text-xs outline-none focus:border-primary text-foreground box-border transition"
+                />
+              </div>
+
+              {/* Pays de livraison */}
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Pays de destination <span className="text-destructive">*</span>
+                </label>
+                <select
+                  required
+                  value={form.country}
+                  onChange={(e) => setForm({ ...form, country: e.target.value })}
+                  className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2.5 text-xs outline-none focus:border-primary text-foreground box-border transition"
+                >
+                  <option value="France">France</option>
+                  <option value="Belgique">Belgique</option>
+                  <option value="Suisse">Suisse</option>
+                  <option value="Luxembourg">Luxembourg</option>
+                  <option value="Canada">Canada</option>
+                  <option value="Bénin">Bénin</option>
+                  <option value="Côte d'Ivoire">Côte d'Ivoire</option>
+                  <option value="Sénégal">Sénégal</option>
+                  <option value="Cameroun">Cameroun</option>
+                  <option value="Togo">Togo</option>
+                  <option value="Gabon">Gabon</option>
+                  <option value="Mali">Mali</option>
+                  <option value="Burkina Faso">Burkina Faso</option>
+                  <option value="Guinée">Guinée</option>
+                  <option value="Congo">Congo</option>
+                  <option value="Autre pays">Autre pays (international)</option>
+                </select>
+              </div>
+
+              {/* Ville et Code Postal */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-xs font-semibold text-foreground mb-1">
+                    Ville <span className="text-destructive">*</span>
+                  </label>
+                  <input
+                    required
+                    type="text"
+                    value={form.city}
+                    onChange={(e) => setForm({ ...form, city: e.target.value })}
+                    placeholder="Ex : Paris, Cotonou, Abidjan..."
+                    className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2.5 text-xs outline-none focus:border-primary text-foreground box-border transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-foreground mb-1">
+                    Code postal
+                  </label>
+                  <input
+                    type="text"
+                    value={form.postalCode}
+                    onChange={(e) => setForm({ ...form, postalCode: e.target.value })}
+                    placeholder="Ex : 75008 (si applicable)"
+                    className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2.5 text-xs outline-none focus:border-primary text-foreground box-border transition"
+                  />
+                </div>
+              </div>
+
+              {/* Adresse complète */}
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Adresse complète (Rue, numéro, quartier, bâtiment...) <span className="text-destructive">*</span>
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  placeholder="Ex : 12 Avenue des Champs-Élysées, Bâtiment B, Apt 4"
+                  className="w-full min-h-[85px] rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2.5 text-xs outline-none focus:border-primary text-foreground box-border transition leading-relaxed resize-y"
+                />
+              </div>
+
+              {/* Instructions de livraison */}
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Instructions ou précisions de livraison (optionnel)
+                </label>
+                <input
+                  type="text"
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                  placeholder="Ex : Sonner à l'interphone Martin, code porte 2468..."
+                  className="w-full rounded-xl border border-border bg-white dark:bg-slate-900 px-3.5 py-2.5 text-xs outline-none focus:border-primary text-foreground box-border transition"
+                />
+              </div>
             </div>
           </div>
 
@@ -1012,18 +1304,18 @@ function CartPage() {
             className="btn-hero w-full py-3.5 text-sm font-semibold disabled:opacity-60 flex items-center justify-center gap-2 shadow-sm"
           >
             {submitting ? (
-              "Vérification sécurisée en cours…"
+              "Enregistrement sécurisé en cours…"
+            ) : paymentMethod === "whatsapp" ? (
+              <>
+                <MessageCircle className="h-4 w-4" /> Envoyer et Régler sur WhatsApp ({formatCurrency(totalEur)})
+              </>
             ) : paymentMethod === "card" ? (
               <>
                 <CreditCard className="h-4 w-4" /> Payer {formatCurrency(totalEur)} en toute sécurité
               </>
-            ) : paymentMethod === "iban" ? (
-              <>
-                <Building2 className="h-4 w-4" /> Valider ma commande et afficher l'IBAN officiel
-              </>
             ) : (
               <>
-                <MessageCircle className="h-4 w-4" /> Commander avec l'assistance WhatsApp
+                <Building2 className="h-4 w-4" /> Valider ma commande et afficher l'IBAN officiel
               </>
             )}
           </button>
@@ -1035,5 +1327,6 @@ function CartPage() {
         </form>
       </aside>
     </div>
+  </div>
   );
 }

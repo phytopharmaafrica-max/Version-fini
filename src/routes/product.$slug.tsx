@@ -1,10 +1,11 @@
-import { createFileRoute, notFound, Link } from "@tanstack/react-router";
+import { createFileRoute, notFound, Link, useNavigate } from "@tanstack/react-router";
 import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
-import { Star, ShoppingCart, Check } from "lucide-react";
+import { Star, ShoppingCart, Check, MessageCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { cart, formatPrice } from "@/lib/cart";
+import { buildWhatsAppConsultationLink } from "@/lib/whatsapp";
 
 const productQO = (slug: string) =>
   queryOptions({
@@ -49,6 +50,7 @@ function ProductPage() {
   const { slug } = Route.useParams();
   const { data: p } = useSuspenseQuery(productQO(slug));
   const [qty, setQty] = useState(1);
+  const navigate = useNavigate();
   if (!p) return null;
 
   const addToCart = () => {
@@ -59,7 +61,13 @@ function ProductPage() {
       },
       qty,
     );
-    toast.success("Ajouté au panier", { description: p.name });
+    toast.success("Ajouté au panier", {
+      description: `${p.name} (×${qty})`,
+      action: {
+        label: "Voir le panier →",
+        onClick: () => navigate({ to: "/panier" }),
+      },
+    });
   };
 
   return (
@@ -93,7 +101,7 @@ function ProductPage() {
               <span className="text-sm text-destructive">Rupture</span>
             )}
           </div>
-          <div className="mt-6 flex items-center gap-3">
+          <div className="mt-6 flex flex-wrap items-center gap-3">
             <div className="inline-flex items-center rounded-full border border-border">
               <button type="button" onClick={() => setQty((q) => Math.max(1, q - 1))} className="h-11 w-11 text-lg">−</button>
               <span className="w-10 text-center font-semibold">{qty}</span>
@@ -102,6 +110,16 @@ function ProductPage() {
             <button type="button" onClick={addToCart} className="btn-hero flex-1 sm:flex-none">
               <ShoppingCart className="h-4 w-4" /> Ajouter au panier
             </button>
+            <a
+              href={buildWhatsAppConsultationLink(p.name)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/40 px-4 py-2.5 text-xs font-semibold text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 transition"
+              title="Demander conseil à un herboriste avant de commander"
+            >
+              <MessageCircle className="h-4 w-4 text-[#25D366]" />
+              Conseil Herboriste WhatsApp
+            </a>
           </div>
 
           {p.description && (

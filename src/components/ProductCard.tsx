@@ -1,6 +1,7 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Star, ShoppingCart } from "lucide-react";
-import { cart, formatPrice } from "@/lib/cart";
+import { cart } from "@/lib/cart";
+import { useCurrency } from "@/lib/currency";
 import { toast } from "sonner";
 
 export type Product = {
@@ -16,6 +17,9 @@ export type Product = {
 };
 
 export function ProductCard({ product }: { product: Product }) {
+  const { format: formatCurrency } = useCurrency();
+  const navigate = useNavigate();
+
   const add = (e: React.MouseEvent) => {
     e.preventDefault();
     cart.add({
@@ -26,7 +30,13 @@ export function ProductCard({ product }: { product: Product }) {
       currency: product.currency,
       image_url: product.image_url,
     });
-    toast.success("Ajouté au panier", { description: product.name });
+    toast.success("Ajouté au panier", {
+      description: product.name,
+      action: {
+        label: "Voir le panier →",
+        onClick: () => navigate({ to: "/panier" }),
+      },
+    });
   };
 
   return (
@@ -55,28 +65,28 @@ export function ProductCard({ product }: { product: Product }) {
           type="button"
           onClick={add}
           aria-label="Ajouter au panier"
-          className="absolute bottom-3 right-3 inline-flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition group-hover:opacity-100"
+          className="absolute bottom-3 right-3 hidden sm:inline-flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground opacity-0 shadow-lg transition group-hover:opacity-100 hover:scale-105 active:scale-95 touch-manipulation"
         >
           <ShoppingCart className="h-4 w-4" />
         </button>
       </div>
-      <div className="flex flex-1 flex-col gap-2 p-4">
+      <div className="flex flex-1 flex-col gap-1.5 p-3.5 sm:p-4">
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <Star className="h-3.5 w-3.5 fill-primary text-primary" />
           <span className="font-medium text-foreground">{product.rating.toFixed(1)}</span>
         </div>
-        <h3 className="font-display text-base font-semibold leading-tight text-foreground">{product.name}</h3>
+        <h3 className="font-display text-sm sm:text-base font-semibold leading-tight text-foreground line-clamp-2">{product.name}</h3>
         {product.short_description && (
-          <p className="line-clamp-2 text-sm text-muted-foreground">{product.short_description}</p>
+          <p className="line-clamp-2 text-xs sm:text-sm text-muted-foreground">{product.short_description}</p>
         )}
-        <div className="mt-auto flex items-center justify-between pt-3">
-          <span className="font-display text-lg font-bold text-navy">
-            {formatPrice(Number(product.price), product.currency)}
+        <div className="mt-auto flex items-center justify-between pt-2.5">
+          <span className="font-display text-sm sm:text-base md:text-lg font-bold text-navy dark:text-emerald-400">
+            {formatCurrency(Number(product.price))}
           </span>
           <button
             type="button"
             onClick={add}
-            className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground transition hover:border-primary hover:text-primary sm:hidden"
+            className="inline-flex sm:hidden items-center justify-center min-h-[36px] rounded-full border border-border bg-background px-3 py-1 text-xs font-semibold text-foreground transition hover:border-primary hover:text-primary active:scale-95 touch-manipulation"
           >
             Ajouter
           </button>

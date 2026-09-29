@@ -1,6 +1,8 @@
 import { Link } from "@tanstack/react-router";
-import { Leaf, ShieldCheck, Mail, Phone, MapPin } from "lucide-react";
+import { Leaf, ShieldCheck, Mail, Phone, MapPin, MessageCircle, Lock } from "lucide-react";
 import { useCms } from "@/lib/cms-store";
+import { buildWhatsAppSupportLink, buildWhatsAppPaymentLink } from "@/lib/whatsapp";
+import { PWAInstallButton } from "./PWAInstallButton";
 
 export function Footer() {
   const cms = useCms();
@@ -28,20 +30,37 @@ export function Footer() {
             {cms.brandDescription ||
               "Produits de bien-être et phytothérapie sélectionnés pour vous accompagner au quotidien en harmonie avec la nature."}
           </p>
-          <div className="pt-2 text-xs text-muted-foreground space-y-1">
+          <div className="pt-2 text-xs text-muted-foreground space-y-1.5">
             {cms.contact.email && (
-              <p className="flex items-center gap-1.5">
-                <Mail className="h-3.5 w-3.5 text-primary" /> {cms.contact.email}
+              <p>
+                <a
+                  href={`mailto:${cms.contact.email}`}
+                  className="flex items-center gap-1.5 hover:text-primary transition"
+                  title="Envoyer un email à notre équipe"
+                >
+                  <Mail className="h-3.5 w-3.5 text-primary shrink-0" />
+                  <span>{cms.contact.email}</span>
+                </a>
               </p>
             )}
             {cms.contact.phone && (
-              <p className="flex items-center gap-1.5">
-                <Phone className="h-3.5 w-3.5 text-primary" /> {cms.contact.phone}
+              <p>
+                <a
+                  href={buildWhatsAppSupportLink("Bonjour, je souhaite contacter l'assistance et les conseillers Phytocare.")}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 hover:text-primary transition"
+                  title="Contacter notre service d'assistance"
+                >
+                  <Phone className="h-3.5 w-3.5 text-primary shrink-0" />
+                  <span>{cms.contact.phone}</span>
+                </a>
               </p>
             )}
             {cms.contact.address && (
               <p className="flex items-center gap-1.5">
-                <MapPin className="h-3.5 w-3.5 text-primary" /> {cms.contact.address}
+                <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
+                <span>{cms.contact.address}</span>
               </p>
             )}
           </div>
@@ -117,7 +136,33 @@ export function Footer() {
         <div>
           <h4 className="text-sm font-semibold text-foreground">Aide & Informations Légales</h4>
           <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-            <li>WhatsApp : {cms.contact.whatsapp || "+229 65 54 96 97"}</li>
+            <li>
+              <a
+                href={buildWhatsAppSupportLink("Bonjour, je souhaite contacter l'assistance et conseil Phytocare.")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300 font-semibold hover:underline"
+              >
+                <MessageCircle className="h-3.5 w-3.5 text-[#25D366]" />
+                Assistance WhatsApp (Canal Sécurisé)
+              </a>
+            </li>
+            <li>
+              <a
+                href={buildWhatsAppPaymentLink({
+                  orderNumber: "DEMANDE-INFO",
+                  items: [],
+                  total: 0,
+                  paymentMethod: "Règlement WhatsApp",
+                })}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground text-xs"
+              >
+                <Lock className="h-3 w-3 text-primary" />
+                Service Paiements (Canal Chiffré)
+              </a>
+            </li>
             <li>
               <Link to="/cgv" className="hover:text-foreground">
                 Conditions Générales de Vente
@@ -136,12 +181,18 @@ export function Footer() {
             <li className="pt-2 text-[11px] text-emerald-800">
               Virements bancaires internationaux (IBAN / SEPA) acceptés
             </li>
+            <li className="pt-2">
+              <PWAInstallButton variant="footer" />
+            </li>
           </ul>
         </div>
       </div>
 
-      <div className="border-t border-border py-5 text-center text-xs text-muted-foreground">
-        © {new Date().getFullYear()} {cms.siteName || "Phytocare"}. Les informations présentées ne constituent pas un avis médical.
+      <div className="border-t border-border py-5 pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))] text-center text-xs text-muted-foreground container-page flex flex-col sm:flex-row items-center justify-between gap-3">
+        <p>© {new Date().getFullYear()} {cms.siteName || "Phytocare"}. Tous droits réservés.</p>
+        <p className="text-[11px] text-muted-foreground/80">
+          Accessible sur smartphone, Android, iOS iPhone, tablette et PC.
+        </p>
       </div>
     </footer>
   );

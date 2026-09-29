@@ -43,8 +43,13 @@ export const cart = {
   add(item: Omit<CartItem, "quantity">, qty = 1) {
     hydrate();
     const existing = items.find((i) => i.id === item.id);
-    if (existing) existing.quantity += qty;
-    else items = [...items, { ...item, quantity: qty }];
+    if (existing) {
+      items = items.map((i) =>
+        i.id === item.id ? { ...i, quantity: i.quantity + qty } : i
+      );
+    } else {
+      items = [...items, { ...item, quantity: qty }];
+    }
     persist();
   },
   setQty(id: string, qty: number) {

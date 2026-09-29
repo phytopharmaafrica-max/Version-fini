@@ -16,6 +16,7 @@ import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { WhatsAppButton } from "@/components/WhatsAppButton";
 import { DorineAssistant } from "@/components/DorineAssistant";
+import { FloatingCart } from "@/components/FloatingCart";
 import { supabase } from "@/integrations/supabase/client";
 import { useRefCapture } from "@/lib/ref-tracking";
 import { useTheme } from "@/lib/theme";
@@ -135,6 +136,7 @@ function RootComponent() {
         <Footer />
         <WhatsAppButton />
         <DorineAssistant />
+        <FloatingCart />
       </div>
       <Toaster position="top-center" richColors />
     </QueryClientProvider>

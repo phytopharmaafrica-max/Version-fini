@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Sparkles,
   X,
@@ -15,8 +15,10 @@ import {
   Check,
   ChevronRight,
   ShieldAlert,
+  MessageCircle,
 } from "lucide-react";
 import { getDorineConsultation, type DorineRecommendation } from "@/lib/dorine-consultant";
+import { buildWhatsAppConsultationLink } from "@/lib/whatsapp";
 import { cart, formatPrice } from "@/lib/cart";
 import type { Product } from "@/data/phytocare-seed";
 import { toast } from "sonner";
@@ -38,6 +40,9 @@ const QUICK_SUGGESTIONS = [
 ];
 
 export function DorineAssistant() {
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -171,7 +176,15 @@ export function DorineAssistant() {
       image_url: product.image_url,
     });
     setAddedIds((prev) => ({ ...prev, [product.id]: true }));
-    toast.success(`${product.name} ajouté au panier !`);
+    toast.success(`${product.name} ajouté au panier !`, {
+      action: {
+        label: "Voir le panier →",
+        onClick: () => {
+          setOpen(false);
+          navigate({ to: "/panier" });
+        },
+      },
+    });
     setTimeout(() => {
       setAddedIds((prev) => ({ ...prev, [product.id]: false }));
     }, 2500);
@@ -190,6 +203,11 @@ export function DorineAssistant() {
       },
     ]);
   };
+
+  // Ne pas superposer Dorine sur la page panier afin de laisser le formulaire entièrement visible
+  if (pathname === "/panier") {
+    return null;
+  }
 
   return (
     <>
@@ -260,6 +278,23 @@ export function DorineAssistant() {
                   <X className="h-4 w-4" />
                 </button>
               </div>
+            </div>
+
+            {/* Ruban consultation humaine WhatsApp (Canal sécurisé & masqué) */}
+            <div className="flex items-center justify-between bg-emerald-50/90 dark:bg-emerald-950/40 border-b border-emerald-200/60 dark:border-emerald-900/60 px-4 py-2 text-[11px]">
+              <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                Conseiller humain disponible
+              </span>
+              <a
+                href={buildWhatsAppConsultationLink()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 font-bold text-emerald-700 dark:text-emerald-300 hover:underline"
+              >
+                <MessageCircle className="h-3.5 w-3.5 text-[#25D366]" />
+                Échanger sur WhatsApp (Canal Protégé)
+              </a>
             </div>
 
             {/* Corps des messages */}
