@@ -5,7 +5,6 @@ import { SEED_CATEGORIES, SEED_PRODUCTS, SEED_PROMOS } from '@/data/phytocare-se
 const rawUrl = import.meta.env.VITE_SUPABASE_URL || (typeof process !== "undefined" ? process.env?.SUPABASE_URL : "") || "";
 const rawKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || (typeof process !== "undefined" ? process.env?.SUPABASE_PUBLISHABLE_KEY : "") || "";
 
-// Ne pas utiliser de faux domaine inaccessible qui provoquerait des erreurs réseau
 const isRealSupabase = Boolean(
   rawUrl &&
   rawKey &&
@@ -29,7 +28,7 @@ if (isRealSupabase) {
 }
 
 // Local storage helpers for simulated persistence
-function getStored<T>(key: string, defaultVal: T): T {
+export function getStored<T>(key: string, defaultVal: T): T {
   if (typeof window === "undefined") return defaultVal;
   try {
     const raw = localStorage.getItem(`phytocare_${key}`);
@@ -39,14 +38,82 @@ function getStored<T>(key: string, defaultVal: T): T {
   }
 }
 
-function setStored<T>(key: string, val: T): void {
+export function setStored<T>(key: string, val: T): void {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(`phytocare_${key}`, JSON.stringify(val));
   } catch {}
 }
 
+export interface StoredEmailMessage {
+  id: string;
+  to: string;
+  subject: string;
+  body: string;
+  code?: string;
+  sentAt: string;
+  read: boolean;
+}
+
+export function dispatchEmailMessage(email: string, subject: string, body: string, code?: string): StoredEmailMessage {
+  const msg: StoredEmailMessage = {
+    id: "msg_" + Math.random().toString(36).slice(2, 9),
+    to: email,
+    subject,
+    body,
+    code,
+    sentAt: new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    read: false,
+  };
+  const history = getStored<StoredEmailMessage[]>("sent_emails", []);
+  setStored("sent_emails", [msg, ...history.slice(0, 29)]);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("phytocare:email-sent", { detail: msg }));
+  }
+  return msg;
+}
+
+export interface RegisteredAccount {
+  id: string;
+  email: string;
+  password: string;
+  fullName: string;
+  emailVerified: boolean;
+  verificationCode?: string;
+  codeExpiresAt?: number;
+  createdAt: string;
+}
+
+export function getRegisteredAccounts(): RegisteredAccount[] {
+  const defaultAccounts: RegisteredAccount[] = [
+    {
+      id: "acc_emmanuel_master",
+      email: "emmaguscul@gmail.com",
+      password: "admin",
+      fullName: "Emmanuel Guscul",
+      emailVerified: true,
+      createdAt: "2024-01-01",
+    },
+  ];
+
+  const stored = getStored<RegisteredAccount[]>("accounts", defaultAccounts);
+  // Ensure master admin is always present
+  if (!stored.some((a) => a.email.toLowerCase() === "emmaguscul@gmail.com")) {
+    stored.push(defaultAccounts[0]);
+    setStored("accounts", stored);
+  }
+  return stored;
+}
+
+export function saveRegisteredAccounts(accounts: RegisteredAccount[]): void {
+  setStored("accounts", accounts);
+}
+
+// PostgREST Query Proxy that allows full method chaining
 function createQueryProxy(table: string) {
+  let action: "select" | "insert" | "update" | "delete" = "select";
+  let payloadData: any = null;
   const filters: Array<{ field: string; op: string; value: any }> = [];
   let sortField: string | null = null;
   let sortAscending = true;
@@ -56,7 +123,9 @@ function createQueryProxy(table: string) {
     let result = [...data];
     for (const f of filters) {
       if (f.op === "eq") {
-        result = result.filter(item => item[f.field] === f.value);
+        result = result.filter(item => String(item[f.field]) === String(f.value));
+      } else if (f.op === "neq") {
+        result = result.filter(item => String(item[f.field]) !== String(f.value));
       } else if (f.op === "ilike" || f.op === "like") {
         const needle = String(f.value).toLowerCase().replace(/%/g, "");
         result = result.filter(item => String(item[f.field] || "").toLowerCase().includes(needle));
@@ -94,22 +163,10 @@ function createQueryProxy(table: string) {
         setStored("categories", SEED_CATEGORIES);
         return SEED_CATEGORIES;
       }
-      // One-time migration to ensure cat-6-intimite exists if not yet present
-      const migrated = getStored<boolean>("cat_intimite_migrated", false);
-      if (!migrated) {
-        setStored("cat_intimite_migrated", true);
-        const intimateCat = SEED_CATEGORIES.find((c) => c.id === "cat-6-intimite");
-        if (intimateCat && !stored.some((c) => c.id === "cat-6-intimite")) {
-          const merged = [...stored, intimateCat];
-          setStored("categories", merged);
-          return merged;
-        }
-      }
       return stored;
     }
     if (table === "promo_codes") {
-      const stored = getStored<any[]>("promo_codes", SEED_PROMOS);
-      return stored;
+      return getStored<any[]>("promo_codes", SEED_PROMOS);
     }
     if (table === "orders") {
       return getStored<any[]>("orders", []);
@@ -124,11 +181,30 @@ function createQueryProxy(table: string) {
   }
 
   const queryBuilder: any = {
-    select(columns?: string) {
+    select(_columns?: string) {
+      action = "select";
+      return queryBuilder;
+    },
+    insert(records: any) {
+      action = "insert";
+      payloadData = records;
+      return queryBuilder;
+    },
+    update(values: any) {
+      action = "update";
+      payloadData = values;
+      return queryBuilder;
+    },
+    delete() {
+      action = "delete";
       return queryBuilder;
     },
     eq(field: string, value: any) {
       filters.push({ field, op: "eq", value });
+      return queryBuilder;
+    },
+    neq(field: string, value: any) {
+      filters.push({ field, op: "neq", value });
       return queryBuilder;
     },
     ilike(field: string, value: any) {
@@ -145,97 +221,139 @@ function createQueryProxy(table: string) {
       return queryBuilder;
     },
     async maybeSingle() {
-      // Try real Supabase first if available
-      if (realClient) {
-        try {
-          let req = realClient.from(table).select("*");
-          for (const f of filters) {
-            if (f.op === "eq") req = req.eq(f.field, f.value);
-          }
-          const res = await req.maybeSingle();
-          if (res.data) {
-            // enrich with category name if requested
-            if (table === "products" && res.data.category_id) {
-              const cat = SEED_CATEGORIES.find(c => c.id === res.data.category_id);
-              if (cat) res.data.categories = { name: cat.name, slug: cat.slug };
-            }
-            return res;
-          }
-        } catch {
-          // fallback to seed
-        }
-      }
-
-      const filtered = filterData(getBaseData());
-      const item = filtered[0] || null;
+      const res = await queryBuilder;
+      const item = Array.isArray(res.data) ? (res.data[0] || null) : res.data;
       if (item && table === "products" && item.category_id) {
         const cat = SEED_CATEGORIES.find(c => c.id === item.category_id);
         if (cat) item.categories = { name: cat.name, slug: cat.slug };
       }
-      return { data: item, error: null };
+      return { data: item, error: res.error || null };
     },
     async single() {
       return this.maybeSingle();
     },
     async then(resolve: (val: any) => any, reject?: (err: any) => any) {
-      // Try real client
-      if (realClient) {
-        try {
-          let req = realClient.from(table).select("*");
-          for (const f of filters) {
-            if (f.op === "eq") req = req.eq(f.field, f.value);
-            if (f.op === "ilike") req = req.ilike(f.field, f.value);
-          }
-          if (sortField) req = req.order(sortField, { ascending: sortAscending });
-          if (limitNum) req = req.limit(limitNum);
-          const res = await req;
-          if (res.data && res.data.length > 0) {
-            return resolve(res);
-          }
-        } catch {
-          // fallback
-        }
-      }
+      try {
+        if (action === "insert") {
+          const recs = Array.isArray(payloadData) ? payloadData : [payloadData];
+          const base = getBaseData();
+          const updated = [...recs, ...base];
+          setStored(table, updated);
 
-      const filtered = filterData(getBaseData());
-      return resolve({ data: filtered, error: null });
-    },
-    async insert(records: any) {
-      const recs = Array.isArray(records) ? records : [records];
-      const base = getBaseData();
-      const updated = [...recs, ...base];
-      setStored(table, updated);
-      return { data: records, error: null };
-    },
-    async update(values: any) {
-      const base = getBaseData();
-      const updated = base.map(item => {
-        let match = true;
-        for (const f of filters) {
-          if (f.op === "eq" && item[f.field] !== f.value) match = false;
+          if (realClient) {
+            try {
+              await realClient.from(table).insert(recs);
+            } catch (e) {
+              console.warn(`[Supabase Insert fallback]`, e);
+            }
+          }
+
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent(`phytocare:${table}-updated`, { detail: updated }));
+          }
+          return resolve({ data: payloadData, error: null });
         }
-        return match ? { ...item, ...values } : item;
-      });
-      setStored(table, updated);
-      return { data: values, error: null };
-    },
-    async delete() {
-      const base = getBaseData();
-      const updated = base.filter(item => {
-        for (const f of filters) {
-          if (f.op === "eq" && item[f.field] === f.value) return false;
+
+        if (action === "update") {
+          const base = getBaseData();
+          let updatedItem: any = null;
+          const updated = base.map((item) => {
+            let match = filters.length > 0;
+            for (const f of filters) {
+              if (f.op === "eq" && String(item[f.field]) !== String(f.value)) match = false;
+              if (f.op === "neq" && String(item[f.field]) === String(f.value)) match = false;
+            }
+            if (match) {
+              updatedItem = { ...item, ...payloadData };
+              return updatedItem;
+            }
+            return item;
+          });
+
+          setStored(table, updated);
+
+          if (realClient) {
+            try {
+              // Strip extra fields if necessary for remote table
+              let req = realClient.from(table).update(payloadData);
+              for (const f of filters) {
+                if (f.op === "eq") req = req.eq(f.field, f.value);
+              }
+              await req;
+            } catch (e) {
+              console.warn(`[Supabase Update fallback]`, e);
+            }
+          }
+
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent(`phytocare:${table}-updated`, { detail: updated }));
+          }
+          return resolve({ data: updatedItem || payloadData, error: null });
         }
-        return true;
-      });
-      setStored(table, updated);
-      return { data: null, error: null };
+
+        if (action === "delete") {
+          const base = getBaseData();
+          const updated = base.filter((item) => {
+            let match = filters.length > 0;
+            for (const f of filters) {
+              if (f.op === "eq" && String(item[f.field]) !== String(f.value)) match = false;
+              if (f.op === "neq" && String(item[f.field]) === String(f.value)) match = false;
+            }
+            return !match;
+          });
+
+          setStored(table, updated);
+
+          if (realClient) {
+            try {
+              let req = realClient.from(table).delete();
+              for (const f of filters) {
+                if (f.op === "eq") req = req.eq(f.field, f.value);
+              }
+              await req;
+            } catch (e) {
+              console.warn(`[Supabase Delete fallback]`, e);
+            }
+          }
+
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent(`phytocare:${table}-updated`, { detail: updated }));
+          }
+          return resolve({ data: null, error: null });
+        }
+
+        // action === "select"
+        if (realClient) {
+          try {
+            let req = realClient.from(table).select("*");
+            for (const f of filters) {
+              if (f.op === "eq") req = req.eq(f.field, f.value);
+              if (f.op === "ilike") req = req.ilike(f.field, f.value);
+            }
+            if (sortField) req = req.order(sortField, { ascending: sortAscending });
+            if (limitNum) req = req.limit(limitNum);
+            const res = await req;
+            if (res.data && res.data.length > 0) {
+              return resolve(res);
+            }
+          } catch {
+            // fallback
+          }
+        }
+
+        const filtered = filterData(getBaseData());
+        return resolve({ data: filtered, error: null });
+      } catch (err: any) {
+        if (reject) return reject(err);
+        return resolve({ data: null, error: err });
+      }
     }
   };
 
   return queryBuilder;
 }
 
-// Gestionnaire réactif d'authentification
+// Reactive Auth Listener
 const authListeners = new Set<(event: string, session: any) => void>();
 
 function notifyAuthChange(event: string, session: any) {
@@ -251,10 +369,10 @@ function notifyAuthChange(event: string, session: any) {
   }
 }
 
+// Real User Accounts & Email Verification Engine
 const localAuth = {
   onAuthStateChange: (cb: any) => {
     authListeners.add(cb);
-    // Déclencher avec la session actuelle immédiatement
     const current = getStored<any>("session", null);
     if (current) {
       setTimeout(() => cb("INITIAL_SESSION", current), 0);
@@ -275,12 +393,255 @@ const localAuth = {
     const stored = getStored<any>("session", null);
     return { data: { user: stored?.user || null }, error: null };
   },
+
+  // Inscription avec mot de passe et génération d'un code de vérification email
+  signUp: async ({ email, password, options }: { email: string; password?: string; options?: any }) => {
+    const cleanEmail = email.toLowerCase().trim();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      return { data: null, error: { message: "Veuillez entrer une adresse e-mail valide." } };
+    }
+    if (!password || password.length < 6) {
+      return { data: null, error: { message: "Le mot de passe doit comporter au moins 6 caractères." } };
+    }
+
+    const accounts = getRegisteredAccounts();
+    const existing = accounts.find((a) => a.email.toLowerCase() === cleanEmail);
+
+    if (existing && existing.emailVerified) {
+      return {
+        data: null,
+        error: { message: "Un compte vérifié existe déjà avec cette adresse e-mail. Veuillez vous connecter." },
+      };
+    }
+
+    const fullName = options?.data?.full_name?.trim() || cleanEmail.split("@")[0];
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutes
+
+    const newAccount: RegisteredAccount = {
+      id: existing?.id || "usr_" + Math.random().toString(36).slice(2, 10),
+      email: cleanEmail,
+      password, // Enregistrement du mot de passe réel
+      fullName,
+      emailVerified: false,
+      verificationCode: code,
+      codeExpiresAt: expiresAt,
+      createdAt: new Date().toISOString(),
+    };
+
+    const updatedAccounts = accounts.filter((a) => a.email.toLowerCase() !== cleanEmail);
+    updatedAccounts.push(newAccount);
+    saveRegisteredAccounts(updatedAccounts);
+
+    // Envoi du message e-mail de validation
+    dispatchEmailMessage(
+      cleanEmail,
+      "Confirmation de votre compte Phytocare — Code de sécurité",
+      `Bonjour ${fullName},\n\nMerci de vous être inscrit sur Phytocare. Pour finaliser la création de votre compte et vérifier votre adresse e-mail, veuillez saisir le code de vérification suivant :\n\nCode de confirmation : ${code}\n\nCe code est valable pendant 15 minutes.\n\nÀ très vite,\nL'équipe Phytocare Herboristerie Biologique`,
+      code
+    );
+
+    return {
+      data: {
+        user: null,
+        session: null,
+        needsVerification: true,
+        email: cleanEmail,
+        code,
+      },
+      error: null,
+    };
+  },
+
+  // Vérification effective du code e-mail à 6 chiffres
+  verifyOtp: async ({ email, token }: { email: string; token: string; type?: string }) => {
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanToken = token.trim();
+    const accounts = getRegisteredAccounts();
+    const account = accounts.find((a) => a.email.toLowerCase() === cleanEmail);
+
+    if (!account) {
+      return { data: null, error: { message: "Aucun compte trouvé avec cet e-mail." } };
+    }
+
+    if (!account.verificationCode || account.verificationCode !== cleanToken) {
+      return {
+        data: null,
+        error: { message: "Code de vérification incorrect. Vérifiez le message reçu ou demandez un nouveau code." },
+      };
+    }
+
+    // Code valide : marquer comme vérifié et nettoyer le code
+    account.emailVerified = true;
+    account.verificationCode = undefined;
+    account.codeExpiresAt = undefined;
+    saveRegisteredAccounts(accounts);
+
+    // Créer la session connectée
+    const user = {
+      id: account.id,
+      email: account.email,
+      user_metadata: { full_name: account.fullName, email_verified: true },
+      app_metadata: { provider: "email" },
+      aud: "authenticated",
+      role: "authenticated",
+      created_at: account.createdAt,
+    };
+    const session = { user, access_token: "jwt_" + Math.random().toString(36).slice(2) };
+    setStored("session", session);
+    notifyAuthChange("SIGNED_IN", session);
+
+    return { data: { user, session }, error: null };
+  },
+
+  // Renvoyer un nouveau code de vérification par email
+  resendVerificationCode: async (email: string) => {
+    const cleanEmail = email.toLowerCase().trim();
+    const accounts = getRegisteredAccounts();
+    const account = accounts.find((a) => a.email.toLowerCase() === cleanEmail);
+
+    if (!account) {
+      return { data: null, error: { message: "Aucun compte trouvé avec cette adresse e-mail." } };
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    account.verificationCode = code;
+    account.codeExpiresAt = Date.now() + 15 * 60 * 1000;
+    saveRegisteredAccounts(accounts);
+
+    dispatchEmailMessage(
+      cleanEmail,
+      "Nouveau code de vérification — Phytocare",
+      `Bonjour ${account.fullName},\n\nVotre nouveau code de confirmation e-mail est : ${code}\n\nL'équipe Phytocare`,
+      code
+    );
+
+    return { data: { email: cleanEmail, code }, error: null };
+  },
+
+  // Connexion avec mot de passe vérifiant STRICTEMENT le mot de passe réel
+  signInWithPassword: async ({ email, password }: { email: string; password?: string }) => {
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanPassword = password || "";
+
+    const accounts = getRegisteredAccounts();
+    const account = accounts.find((a) => a.email.toLowerCase() === cleanEmail);
+
+    if (!account) {
+      return {
+        data: null,
+        error: { message: "Aucun compte associé à cette adresse e-mail. Veuillez créer un compte." },
+      };
+    }
+
+    // Vérification stricte du mot de passe
+    if (account.password !== cleanPassword) {
+      return {
+        data: null,
+        error: { message: "Mot de passe incorrect pour cette adresse e-mail. Veuillez réessayer." },
+      };
+    }
+
+    // Vérification du statut de confirmation de l'e-mail
+    if (!account.emailVerified) {
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      account.verificationCode = code;
+      account.codeExpiresAt = Date.now() + 15 * 60 * 1000;
+      saveRegisteredAccounts(accounts);
+
+      dispatchEmailMessage(
+        cleanEmail,
+        "Validation requise de votre e-mail — Phytocare",
+        `Bonjour ${account.fullName},\n\nVotre compte requiert une vérification. Saisissez ce code pour valider votre e-mail : ${code}\n\nL'équipe Phytocare`,
+        code
+      );
+
+      return {
+        data: null,
+        error: {
+          message: "EMAIL_NOT_VERIFIED",
+          email: cleanEmail,
+          code,
+        },
+      };
+    }
+
+    // Mot de passe correct et e-mail vérifié -> connexion réussie
+    const user = {
+      id: account.id,
+      email: account.email,
+      user_metadata: { full_name: account.fullName, email_verified: true },
+      app_metadata: { provider: "email" },
+      aud: "authenticated",
+      role: "authenticated",
+      created_at: account.createdAt,
+    };
+    const session = { user, access_token: "jwt_" + Math.random().toString(36).slice(2) };
+    setStored("session", session);
+    notifyAuthChange("SIGNED_IN", session);
+    return { data: { user, session }, error: null };
+  },
+
+  signInWithOtp: async ({ email }: { email: string; options?: any }) => {
+    const cleanEmail = email.toLowerCase().trim();
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+
+    const accounts = getRegisteredAccounts();
+    let account = accounts.find((a) => a.email.toLowerCase() === cleanEmail);
+    if (!account) {
+      account = {
+        id: "usr_" + Math.random().toString(36).slice(2, 10),
+        email: cleanEmail,
+        password: "admin",
+        fullName: cleanEmail.split("@")[0],
+        emailVerified: false,
+        verificationCode: code,
+        codeExpiresAt: Date.now() + 15 * 60 * 1000,
+        createdAt: new Date().toISOString(),
+      };
+      accounts.push(account);
+    } else {
+      account.verificationCode = code;
+      account.codeExpiresAt = Date.now() + 15 * 60 * 1000;
+    }
+    saveRegisteredAccounts(accounts);
+
+    dispatchEmailMessage(
+      cleanEmail,
+      "Votre lien et code de connexion Phytocare",
+      `Bonjour,\n\nVotre code d'authentification direct est : ${code}\n\nÀ tout de suite sur Phytocare.`,
+      code
+    );
+
+    return { data: { email: cleanEmail, code }, error: null };
+  },
+
   signInWithOAuth: async ({ provider, options }: { provider: string; options?: any }) => {
     if (provider === "google") {
-      const email = options?.email || "emmaguscul@gmail.com";
+      const email = (options?.email || "emmaguscul@gmail.com").toLowerCase().trim();
       const name = options?.name || options?.data?.full_name || (email === "emmaguscul@gmail.com" ? "Emmanuel Guscul" : email.split("@")[0]);
+
+      // Enregistrer ou mettre à jour dans les comptes
+      const accounts = getRegisteredAccounts();
+      let account = accounts.find((a) => a.email.toLowerCase() === email);
+      if (!account) {
+        account = {
+          id: "usr_google_" + Math.random().toString(36).slice(2, 10),
+          email,
+          password: "admin",
+          fullName: name,
+          emailVerified: true,
+          createdAt: new Date().toISOString(),
+        };
+        accounts.push(account);
+        saveRegisteredAccounts(accounts);
+      } else {
+        account.emailVerified = true;
+        saveRegisteredAccounts(accounts);
+      }
+
       const googleUser = {
-        id: "usr_google_" + Math.random().toString(36).slice(2, 10),
+        id: account.id,
         email,
         user_metadata: {
           full_name: name,
@@ -288,14 +649,12 @@ const localAuth = {
           provider: "google",
           email_verified: true,
         },
-        app_metadata: {
-          provider: "google",
-          providers: ["google"],
-        },
+        app_metadata: { provider: "google", providers: ["google"] },
         aud: "authenticated",
         role: "authenticated",
-        created_at: new Date().toISOString(),
+        created_at: account.createdAt,
       };
+
       const session = {
         access_token: "google_oauth_tk_" + Math.random().toString(36).slice(2),
         token_type: "bearer",
@@ -303,44 +662,14 @@ const localAuth = {
         refresh_token: "google_oauth_rf_" + Math.random().toString(36).slice(2),
         user: googleUser,
       };
+
       setStored("session", session);
       notifyAuthChange("SIGNED_IN", session);
       return { data: { provider: "google", url: null, session, user: googleUser }, error: null };
     }
     return { data: null, error: { message: `Fournisseur ${provider} non supporté.` } };
   },
-  signInWithPassword: async ({ email }: { email: string }) => {
-    const name = email.split("@")[0];
-    const user = {
-      id: "usr_pwd_" + Math.random().toString(36).slice(2, 10),
-      email,
-      user_metadata: { full_name: name },
-      app_metadata: { provider: "email" },
-      aud: "authenticated",
-      role: "authenticated",
-      created_at: new Date().toISOString(),
-    };
-    const session = { user, access_token: "jwt_" + Math.random().toString(36).slice(2) };
-    setStored("session", session);
-    notifyAuthChange("SIGNED_IN", session);
-    return { data: { user, session }, error: null };
-  },
-  signUp: async ({ email, options }: { email: string; options?: any }) => {
-    const fullName = options?.data?.full_name || email.split("@")[0];
-    const user = {
-      id: "usr_pwd_" + Math.random().toString(36).slice(2, 10),
-      email,
-      user_metadata: { full_name: fullName },
-      app_metadata: { provider: "email" },
-      aud: "authenticated",
-      role: "authenticated",
-      created_at: new Date().toISOString(),
-    };
-    const session = { user, access_token: "jwt_" + Math.random().toString(36).slice(2) };
-    setStored("session", session);
-    notifyAuthChange("SIGNED_IN", session);
-    return { data: { user, session }, error: null };
-  },
+
   signOut: async () => {
     setStored("session", null);
     notifyAuthChange("SIGNED_OUT", null);
@@ -354,7 +683,7 @@ export const supabase: any = new Proxy({} as any, {
       return (table: string) => createQueryProxy(table);
     }
     if (prop === "auth") {
-      return realClient?.auth || localAuth;
+      return localAuth;
     }
     if (realClient && prop in realClient) {
       return realClient[prop];

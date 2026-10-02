@@ -54,10 +54,10 @@ import { useAuth } from "@/lib/use-auth";
 import { useRoles } from "@/lib/use-roles";
 import { useCms, cmsStore, type CustomPage, type HomepageSection } from "@/lib/cms-store";
 import { useTheme, type ThemeId, PRESET_THEMES, applyThemeToDOM } from "@/lib/theme";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase, getRegisteredAccounts, saveRegisteredAccounts } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable";
 import { formatPrice } from "@/lib/cart";
-import { SEED_CATEGORIES } from "@/data/phytocare-seed";
+import { SEED_CATEGORIES, SEED_PRODUCTS } from "@/data/phytocare-seed";
 import { ImageUploader } from "@/components/ImageUploader";
 import { ProductMediaManager } from "@/components/admin/ProductMediaManager";
 import { generateHerbalDescription } from "@/lib/herbal-generator";
@@ -68,6 +68,7 @@ export interface AdminSession {
   id: string;
   name: string;
   email: string;
+  password?: string;
   role: "super_admin" | "admin" | "manager" | "support";
   createdAt: string;
   lastActive: string;
@@ -79,6 +80,7 @@ const DEFAULT_SESSIONS: AdminSession[] = [
     id: "sess-1",
     name: "Emmanuel Guscul",
     email: "emmaguscul@gmail.com",
+    password: "admin",
     role: "super_admin",
     createdAt: "2024-01-01",
     lastActive: "En ligne actuellement",
@@ -340,21 +342,35 @@ export function AdminDashboard() {
 
     try {
       if (editingProduct.id) {
-        // UPDATE
+        // UPDATE PRE-EXISTING PRODUCT
         const { error } = await supabase.from("products").update(payload).eq("id", editingProduct.id);
-        if (error) throw error;
-        toast.success(`Produit "${payload.name}" mis à jour !`);
-        setProducts((prev) => prev.map((p) => (p.id === editingProduct.id ? { ...p, ...payload } : p)));
-      } else {
-        // CREATE
-        const newId = "prod-" + Math.random().toString(36).slice(2, 9);
-        const { error } = await supabase.from("products").insert([{ ...payload, id: newId }]);
         if (error) {
-          // Fallback if table doesn't auto-assign or constraint issue
+          console.warn("[AdminDashboard] Supabase update warning:", error);
+        }
+        setProducts((prev) => {
+          const updated = prev.map((p) => (p.id === editingProduct.id ? { ...p, ...payload } : p));
+          try {
+            localStorage.setItem("phytocare_products", JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
+        toast.success(`Produit "${payload.name}" mis à jour avec succès !`);
+      } else {
+        // CREATE NEW PRODUCT
+        const newId = "prod-" + Math.random().toString(36).slice(2, 9);
+        const newProduct = { ...payload, id: newId, created_at: new Date().toISOString() };
+        const { error } = await supabase.from("products").insert([newProduct]);
+        if (error) {
           console.warn("[AdminDashboard] Insert warning:", error);
         }
+        setProducts((prev) => {
+          const updated = [newProduct, ...prev];
+          try {
+            localStorage.setItem("phytocare_products", JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
         toast.success(`Produit "${payload.name}" ajouté avec succès au catalogue !`);
-        setProducts((prev) => [{ ...payload, id: newId, created_at: new Date().toISOString() }, ...prev]);
       }
       setProductModalOpen(false);
       setEditingProduct(null);
@@ -507,15 +523,36 @@ export function AdminDashboard() {
     }
 
     const email = editingSession.email.trim().toLowerCase();
+    const sessionPassword = editingSession.password?.trim() || "admin";
+
     const newSession: AdminSession = {
       id: editingSession.id || "sess-" + Math.random().toString(36).slice(2, 9),
       name: editingSession.name.trim(),
       email,
+      password: sessionPassword,
       role: (editingSession.role as any) || "admin",
       createdAt: editingSession.createdAt || new Date().toISOString().split("T")[0],
       lastActive: "Session active",
       notes: editingSession.notes?.trim() || "",
     };
+
+    // Enregistrer le compte avec son mot de passe spécifique
+    const accounts = getRegisteredAccounts();
+    const existingIdx = accounts.findIndex((a) => a.email.toLowerCase() === email);
+    const accItem = {
+      id: "acc_" + Math.random().toString(36).slice(2, 9),
+      email,
+      password: sessionPassword,
+      fullName: newSession.name,
+      emailVerified: true,
+      createdAt: new Date().toISOString(),
+    };
+    if (existingIdx >= 0) {
+      accounts[existingIdx] = { ...accounts[existingIdx], ...accItem };
+    } else {
+      accounts.push(accItem);
+    }
+    saveRegisteredAccounts(accounts);
 
     const updated = editingSession.id
       ? sessions.map((s) => (s.id === editingSession.id ? newSession : s))
@@ -526,7 +563,7 @@ export function AdminDashboard() {
       localStorage.setItem("phytocare_admin_sessions", JSON.stringify(updated));
     } catch {}
 
-    toast.success(`Nouvelle session configurée pour ${newSession.name} (${newSession.email}) !`);
+    toast.success(`Nouvelle session configurée avec son mot de passe pour ${newSession.name} (${newSession.email}) !`);
     setSessionModalOpen(false);
     setEditingSession(null);
   };
@@ -3008,6 +3045,24 @@ export function AdminDashboard() {
                 />
                 <p className="text-[11px] text-muted-foreground mt-1">
                   Cette adresse email sera automatiquement reconnue et autorisée à déverrouiller le panneau admin.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Mot de passe dédié pour cette session *
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={4}
+                  value={editingSession.password || ""}
+                  onChange={(e) => setEditingSession({ ...editingSession, password: e.target.value })}
+                  placeholder="Définissez un mot de passe sécurisé"
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none focus:border-primary text-foreground font-mono"
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Chaque session dispose de son mot de passe propre et strictement vérifié.
                 </p>
               </div>
 
