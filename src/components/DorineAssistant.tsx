@@ -35,7 +35,7 @@ const QUICK_SUGGESTIONS = [
   "Je me sens stressé(e) et sous tension",
   "Ventre gonflé et digestion difficile",
   "Renforcer mon immunité",
-  "Bienfaits de l'Huile de Nigelle",
+  "Vitalité sexuelle & baisse de libido",
   "Fatigue et manque d'énergie",
 ];
 

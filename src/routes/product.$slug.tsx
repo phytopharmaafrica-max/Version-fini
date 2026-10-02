@@ -6,19 +6,41 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { cart, formatPrice } from "@/lib/cart";
 import { buildWhatsAppConsultationLink } from "@/lib/whatsapp";
+import { ProductMediaGallery } from "@/components/ProductMediaGallery";
+import { SEED_PRODUCTS, SEED_CATEGORIES } from "@/data/phytocare-seed";
 
 const productQO = (slug: string) =>
   queryOptions({
     queryKey: ["product", slug],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("products")
-        .select("*, categories(slug, name)")
-        .eq("slug", slug)
-        .eq("active", true)
-        .maybeSingle();
-      if (error) throw error;
-      return data;
+      try {
+        const { data, error } = await supabase
+          .from("products")
+          .select("*, categories(slug, name)")
+          .eq("slug", slug)
+          .eq("active", true)
+          .maybeSingle();
+        if (!error && data) {
+          const seedMatch = SEED_PRODUCTS.find((sp) => sp.slug === slug);
+          return {
+            ...data,
+            images: data.images || seedMatch?.images || [],
+            video_url: data.video_url || seedMatch?.video_url || null,
+          };
+        }
+      } catch (e) {
+        console.warn("Supabase fetch failed, falling back to seed:", e);
+      }
+      const found = SEED_PRODUCTS.find((sp) => sp.slug === slug);
+      if (found) {
+        const cat = SEED_CATEGORIES.find((c) => c.id === found.category_id);
+        return {
+          ...found,
+          categories: cat ? { slug: cat.slug, name: cat.name } : null,
+          reviews_count: 24,
+        };
+      }
+      return null;
     },
   });
 
@@ -73,12 +95,14 @@ function ProductPage() {
   return (
     <div className="container-page py-10">
       <div className="grid gap-10 lg:grid-cols-2">
-        <div className="overflow-hidden rounded-3xl bg-mint/40">
-          {p.image_url ? (
-            <img src={p.image_url} alt={p.name} className="aspect-square w-full object-cover" />
-          ) : (
-            <div className="aspect-square" />
-          )}
+        <div className="w-full">
+          <ProductMediaGallery
+            productName={p.name}
+            coverImage={p.image_url}
+            images={p.images}
+            videoUrl={p.video_url}
+            badge={p.badge}
+          />
         </div>
         <div>
           {p.categories && (

@@ -1,6 +1,6 @@
 {
-  "name": "Aura Wellness AI",
-  "description": "Plateforme bien-être et santé Aura Wellness AI.",
+  "name": "Phytocare — Herboristerie Biologique & Remèdes Naturels",
+  "description": "Boutique d'herboristerie moderne : synergies de plantes bio, conseils herboristes personnalisés, commandes en ligne sécurisées et livraison rapide.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

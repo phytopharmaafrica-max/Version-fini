@@ -2,26 +2,38 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { ProductCard } from "@/components/ProductCard";
+import { SEED_CATEGORIES, SEED_PRODUCTS } from "@/data/phytocare-seed";
 
 const catQO = (slug: string) =>
   queryOptions({
     queryKey: ["category", slug],
     queryFn: async () => {
-      const { data: cat, error } = await supabase
-        .from("categories")
-        .select("id, slug, name, description")
-        .eq("slug", slug)
-        .maybeSingle();
-      if (error) throw error;
+      try {
+        const { data: cat, error } = await supabase
+          .from("categories")
+          .select("id, slug, name, description")
+          .eq("slug", slug)
+          .maybeSingle();
+        if (!error && cat) {
+          const { data: products, error: e2 } = await supabase
+            .from("products")
+            .select("id, slug, name, short_description, price, currency, image_url, badge, rating")
+            .eq("active", true)
+            .eq("category_id", cat.id)
+            .order("created_at", { ascending: false });
+          if (!e2 && products && products.length > 0) {
+            return { cat, products };
+          }
+          const seedProducts = SEED_PRODUCTS.filter((p) => p.category_id === cat.id && p.active);
+          return { cat, products: seedProducts.length > 0 ? seedProducts : (products ?? []) };
+        }
+      } catch (e) {
+        console.warn("catQO fallback to seed:", e);
+      }
+      const cat = SEED_CATEGORIES.find((c) => c.slug === slug);
       if (!cat) return null;
-      const { data: products, error: e2 } = await supabase
-        .from("products")
-        .select("id, slug, name, short_description, price, currency, image_url, badge, rating")
-        .eq("active", true)
-        .eq("category_id", cat.id)
-        .order("created_at", { ascending: false });
-      if (e2) throw e2;
-      return { cat, products: products ?? [] };
+      const products = SEED_PRODUCTS.filter((p) => p.category_id === cat.id && p.active);
+      return { cat, products };
     },
   });
 

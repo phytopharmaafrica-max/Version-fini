@@ -80,10 +80,31 @@ function createQueryProxy(table: string) {
   function getBaseData(): any[] {
     if (table === "products") {
       const stored = getStored<any[]>("products", SEED_PRODUCTS);
+      const missing = SEED_PRODUCTS.filter((sp) => !stored.some((item) => item.id === sp.id));
+      if (missing.length > 0) {
+        const merged = [...stored, ...missing];
+        setStored("products", merged);
+        return merged;
+      }
       return stored;
     }
     if (table === "categories") {
-      const stored = getStored<any[]>("categories", SEED_CATEGORIES);
+      const stored = getStored<any[] | null>("categories", null);
+      if (!stored) {
+        setStored("categories", SEED_CATEGORIES);
+        return SEED_CATEGORIES;
+      }
+      // One-time migration to ensure cat-6-intimite exists if not yet present
+      const migrated = getStored<boolean>("cat_intimite_migrated", false);
+      if (!migrated) {
+        setStored("cat_intimite_migrated", true);
+        const intimateCat = SEED_CATEGORIES.find((c) => c.id === "cat-6-intimite");
+        if (intimateCat && !stored.some((c) => c.id === "cat-6-intimite")) {
+          const merged = [...stored, intimateCat];
+          setStored("categories", merged);
+          return merged;
+        }
+      }
       return stored;
     }
     if (table === "promo_codes") {

@@ -95,6 +95,11 @@ export function Footer() {
                 Vitalité & Tonus
               </Link>
             </li>
+            <li>
+              <Link to="/category/$slug" params={{ slug: "sante-intime" }} className="hover:text-foreground">
+                Santé Intime & Vigueur
+              </Link>
+            </li>
           </ul>
         </div>
 

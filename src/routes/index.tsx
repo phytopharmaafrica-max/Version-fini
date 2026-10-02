@@ -7,6 +7,7 @@ import {
   Moon,
   Sparkles,
   Zap,
+  Heart,
   ArrowRight,
   Truck,
   BadgeCheck,
@@ -27,6 +28,7 @@ const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   moon: Moon,
   sparkles: Sparkles,
   zap: Zap,
+  heart: Heart,
 };
 
 const featuredQO = queryOptions({
@@ -194,7 +196,7 @@ function HomePage() {
               </p>
             </div>
           </div>
-          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {categories.map((c: any) => {
               const Icon = ICONS[c.icon ?? ""] ?? Leaf;
               return (

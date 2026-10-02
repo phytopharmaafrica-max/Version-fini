@@ -16,6 +16,8 @@ export interface Product {
   price: number;
   currency: string;
   image_url: string;
+  images?: string[] | null; // Galerie de photos multiples (jusqu'à 10 photos)
+  video_url?: string | null; // Vidéo de démonstration ou d'utilisation
   badge?: string | null;
   rating?: number | null;
   category_id?: string | null;
@@ -81,9 +83,82 @@ export const SEED_CATEGORIES: Category[] = [
     icon: "zap",
     sort_order: 5,
   },
+  {
+    id: "cat-6-intimite",
+    slug: "sante-intime",
+    name: "Santé Intime & Vigueur",
+    description: "Plantes adaptogènes ancestrales, libido, vigueur masculine, équilibre féminin et épanouissement intime au naturel.",
+    icon: "heart",
+    sort_order: 6,
+  },
 ];
 
 export const SEED_PRODUCTS: Product[] = [
+  {
+    id: "prod-9-vigueur-royale",
+    slug: "vigueur-royale-tribulus-ginseng",
+    name: "Vigueur Royale au Tribulus & Ginseng Rouge",
+    short_description: "Complexe tonifiant puissant pour stimuler la virilité, l'endurance masculine et le tonus intime.",
+    description: "Formule herboriste de haute puissance associant le Tribulus terrestris titré à 90% de saponines, le Ginseng rouge de Corée, le Bois bandé traditionnel et le zinc chélaté. Ce concentré végétal soutient la vigueur intime, combat la baisse de désir et optimise la circulation sanguine pour des performances naturelles et durables.",
+    price: 29.90,
+    currency: "EUR",
+    image_url: "https://images.unsplash.com/photo-1544787219-7f47ccb76574?w=800&auto=format&fit=crop&q=80",
+    images: [
+      "https://images.unsplash.com/photo-1544787219-7f47ccb76574?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1615485290382-441e4d049cb5?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&auto=format&fit=crop&q=80",
+    ],
+    video_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+    badge: "Puissance Naturelle",
+    rating: 4.95,
+    category_id: "cat-6-intimite",
+    stock: 45,
+    active: true,
+    featured: true,
+    benefits: [
+      "Stimule l'énergie intime et la vitalité sexuelle",
+      "Améliore l'endurance et les performances masculines",
+      "Soutient la synthèse hormonale naturelle (testostérone)",
+      "Formule 100% plantes sans produits chimiques"
+    ],
+    ingredients: ["Tribulus terrestris titré", "Panax Ginseng rouge", "Écorce de Bois Bandé (Richeria grandis)", "Gingembre sauvage", "Zinc bisglycinate"],
+    usage_instructions: "2 gélules par jour avec un verre d'eau, de préférence 30 minutes avant le repas ou l'activité intime. Cure recommandée de 30 jours.",
+    contraindications: "Réservé à l'adulte. En cas de traitement cardiovasculaire lourd, demander l'avis d'un professionnel de santé.",
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: "prod-10-elixir-aphrodite",
+    slug: "elixir-aphrodite-maca-rouge-bio",
+    name: "Élixir d'Aphrodite & Maca Rouge Bio",
+    short_description: "Harmonie intime, stimulation du désir féminin et vitalité hormonale douce.",
+    description: "Spécialement conçu pour l'épanouissement intime féminin, cet élixir associe la Maca rouge des Andes péruviennes, la Damiana sauvage et le Shatavari ayurvédique. Il aide à relancer la sensibilité sensorielle, apaise la sécheresse intime et rétablit une libido épanouie et sereine.",
+    price: 27.90,
+    currency: "EUR",
+    image_url: "https://images.unsplash.com/photo-1597481499750-3e6b22637e12?w=800&auto=format&fit=crop&q=80",
+    images: [
+      "https://images.unsplash.com/photo-1597481499750-3e6b22637e12?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800&auto=format&fit=crop&q=80",
+    ],
+    video_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+    badge: "Formule Désir",
+    rating: 4.9,
+    category_id: "cat-6-intimite",
+    stock: 38,
+    active: true,
+    featured: true,
+    benefits: [
+      "Ravive le désir et la réceptivité sensuelle",
+      "Améliore l'hydratation et le confort intime naturel",
+      "Équilibre les cycles et dissipe la fatigue émotionnelle",
+      "Plantes adaptogènes biologiques certifiées"
+    ],
+    ingredients: ["Maca rouge bio (Lepidium meyenii)", "Feuilles de Damiana (Turnera diffusa)", "Racine de Shatavari bio", "Fleurs d'hibiscus"],
+    usage_instructions: "Diluer 20 à 30 gouttes chaque jour dans un demi-verre d'eau ou une tisane tiède, le matin ou avant les moments intimes.",
+    contraindications: "Déconseillé pendant la grossesse et l'allaitement sans avis médical.",
+    created_at: new Date().toISOString(),
+  },
   {
     id: "prod-1-tisane-sommeil",
     slug: "tisane-sommeil-reparateur-bio",
@@ -93,6 +168,14 @@ export const SEED_PRODUCTS: Product[] = [
     price: 14.90,
     currency: "EUR",
     image_url: "https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=800&auto=format&fit=crop&q=80",
+    images: [
+      "https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1597481499750-3e6b22637e12?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1544787219-7f47ccb76574?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1514733670139-4d87a1941d55?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=800&auto=format&fit=crop&q=80",
+    ],
+    video_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
     badge: "Best-seller",
     rating: 4.9,
     category_id: "cat-3-sommeil",
@@ -119,6 +202,13 @@ export const SEED_PRODUCTS: Product[] = [
     price: 19.90,
     currency: "EUR",
     image_url: "https://images.unsplash.com/photo-1615485290382-441e4d049cb5?w=800&auto=format&fit=crop&q=80",
+    images: [
+      "https://images.unsplash.com/photo-1615485290382-441e4d049cb5?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1544787219-7f47ccb76574?w=800&auto=format&fit=crop&q=80",
+    ],
+    video_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
     badge: "Populaire",
     rating: 4.85,
     category_id: "cat-1-immunite",
@@ -145,6 +235,13 @@ export const SEED_PRODUCTS: Product[] = [
     price: 24.90,
     currency: "EUR",
     image_url: "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=800&auto=format&fit=crop&q=80",
+    images: [
+      "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1556228720-195a672e8a03?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?w=800&auto=format&fit=crop&q=80",
+      "https://images.unsplash.com/photo-1514733670139-4d87a1941d55?w=800&auto=format&fit=crop&q=80",
+    ],
+    video_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
     badge: "Recommandé",
     rating: 4.95,
     category_id: "cat-2-stress",

@@ -37,21 +37,56 @@ import {
   TrendingUp,
   Tag,
   Sliders,
+  Heart,
+  Shield,
+  Zap,
+  Moon,
+  Flame,
+  Smile,
+  Leaf,
+  FolderPlus,
+  Users,
+  UserPlus,
+  UserCheck,
+  Layout,
 } from "lucide-react";
 import { useAuth } from "@/lib/use-auth";
 import { useRoles } from "@/lib/use-roles";
-import { useCms, cmsStore, type CustomPage } from "@/lib/cms-store";
+import { useCms, cmsStore, type CustomPage, type HomepageSection } from "@/lib/cms-store";
 import { useTheme, type ThemeId, PRESET_THEMES, applyThemeToDOM } from "@/lib/theme";
 import { supabase } from "@/integrations/supabase/client";
 import { lovable } from "@/integrations/lovable";
 import { formatPrice } from "@/lib/cart";
 import { SEED_CATEGORIES } from "@/data/phytocare-seed";
 import { ImageUploader } from "@/components/ImageUploader";
+import { ProductMediaManager } from "@/components/admin/ProductMediaManager";
 import { generateHerbalDescription } from "@/lib/herbal-generator";
 
 const AUTHORIZED_ADMIN_EMAIL = "emmaguscul@gmail.com";
 
-type AdminTab = "products" | "pages" | "theme" | "overview" | "bank" | "orders";
+export interface AdminSession {
+  id: string;
+  name: string;
+  email: string;
+  role: "super_admin" | "admin" | "manager" | "support";
+  createdAt: string;
+  lastActive: string;
+  notes?: string;
+}
+
+const DEFAULT_SESSIONS: AdminSession[] = [
+  {
+    id: "sess-1",
+    name: "Emmanuel Guscul",
+    email: "emmaguscul@gmail.com",
+    role: "super_admin",
+    createdAt: "2024-01-01",
+    lastActive: "En ligne actuellement",
+    notes: "Fondateur & Administrateur Principal",
+  },
+];
+
+type AdminTab = "products" | "categories" | "sessions" | "pages" | "theme" | "overview" | "bank" | "orders";
 
 export function AdminDashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -78,6 +113,36 @@ export function AdminDashboard() {
   const [generatingDesc, setGeneratingDesc] = useState(false);
   const [productToDelete, setProductToDelete] = useState<any>(null);
 
+  // Categories / Sections CRUD State
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<any>(null);
+  const [categoryToDelete, setCategoryToDelete] = useState<any>(null);
+
+  // Sessions & Admin Access CRUD State
+  const [sessions, setSessions] = useState<AdminSession[]>(() => {
+    if (typeof window === "undefined") return DEFAULT_SESSIONS;
+    try {
+      const raw = localStorage.getItem("phytocare_admin_sessions");
+      if (!raw) {
+        localStorage.setItem("phytocare_admin_sessions", JSON.stringify(DEFAULT_SESSIONS));
+        return DEFAULT_SESSIONS;
+      }
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_SESSIONS;
+    } catch {
+      return DEFAULT_SESSIONS;
+    }
+  });
+  const [sessionModalOpen, setSessionModalOpen] = useState(false);
+  const [editingSession, setEditingSession] = useState<Partial<AdminSession> | null>(null);
+  const [sessionToDelete, setSessionToDelete] = useState<AdminSession | null>(null);
+
+  // Home Page Sections CRUD State
+  const [sectionModalOpen, setSectionModalOpen] = useState(false);
+  const [editingSection, setEditingSection] = useState<any>(null);
+  const [sectionToDelete, setSectionToDelete] = useState<any>(null);
+  const [sectionsSubTab, setSectionsSubTab] = useState<"catalog" | "homepage">("catalog");
+
   // Pages CRUD State
   const [pageModalOpen, setPageModalOpen] = useState(false);
   const [editingPage, setEditingPage] = useState<Partial<CustomPage> | null>(null);
@@ -100,9 +165,20 @@ export function AdminDashboard() {
   const [bankForm, setBankForm] = useState({ ...cms.bank });
   const [showAdminIban, setShowAdminIban] = useState(false);
 
-  // Verification of authorized email
+  // Verification of authorized email / active sessions
   const currentUserEmail = (user?.email || "").toLowerCase().trim();
-  const isAuthorizedAdmin = currentUserEmail === AUTHORIZED_ADMIN_EMAIL.toLowerCase();
+  const isAuthorizedAdmin =
+    currentUserEmail === AUTHORIZED_ADMIN_EMAIL.toLowerCase() ||
+    sessions.some((s) => s.email.toLowerCase() === currentUserEmail) ||
+    isAdmin;
+
+  const isEmailAllowed = (email: string) => {
+    const e = email.toLowerCase().trim();
+    return (
+      e === AUTHORIZED_ADMIN_EMAIL.toLowerCase() ||
+      sessions.some((s) => s.email.toLowerCase() === e)
+    );
+  };
 
   // Load Database Items (Products, Categories, Orders)
   const loadDatabaseData = async () => {
@@ -147,21 +223,21 @@ export function AdminDashboard() {
   // ----------------------------------------------------
   const handleEmailPasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loginEmail.toLowerCase().trim() !== AUTHORIZED_ADMIN_EMAIL.toLowerCase()) {
-      toast.error(`Accès refusé. Seul ${AUTHORIZED_ADMIN_EMAIL} est autorisé.`);
+    const cleanEmail = loginEmail.toLowerCase().trim();
+    if (!isEmailAllowed(cleanEmail)) {
+      toast.error(`Accès refusé. Cette adresse n'est pas configurée dans les sessions administrateur.`);
       return;
     }
     setIsSubmittingAuth(true);
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email: loginEmail,
+        email: cleanEmail,
         password: loginPassword,
       });
       if (error) {
-        // If password is not set or failed, provide fallback guidance or offer OTP
         toast.error("Mot de passe incorrect ou compte non encore configuré avec ce mot de passe.");
       } else {
-        toast.success(`Authentification réussie en tant que ${AUTHORIZED_ADMIN_EMAIL} !`);
+        toast.success(`Authentification réussie pour ${cleanEmail} !`);
       }
     } catch (err: any) {
       toast.error(err.message || "Erreur de connexion.");
@@ -172,16 +248,21 @@ export function AdminDashboard() {
 
   const handleMagicLinkLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanEmail = loginEmail.toLowerCase().trim();
+    if (!isEmailAllowed(cleanEmail)) {
+      toast.error(`Accès refusé. Cette adresse n'est pas autorisée.`);
+      return;
+    }
     setIsSubmittingAuth(true);
     try {
       const { error } = await supabase.auth.signInWithOtp({
-        email: AUTHORIZED_ADMIN_EMAIL,
+        email: cleanEmail,
         options: {
           emailRedirectTo: window.location.origin + "/admin",
         },
       });
       if (error) throw error;
-      toast.success(`Lien magique sécurisé envoyé à ${AUTHORIZED_ADMIN_EMAIL}. Vérifiez votre boîte de réception.`);
+      toast.success(`Lien magique sécurisé envoyé à ${cleanEmail}. Vérifiez votre boîte de réception.`);
     } catch (err: any) {
       toast.error(err.message || "Erreur d'envoi du lien magique.");
     } finally {
@@ -189,18 +270,22 @@ export function AdminDashboard() {
     }
   };
 
-  const handleQuickVerifiedAdminSession = async () => {
+  const handleQuickVerifiedAdminSession = async (targetEmail?: string, targetName?: string) => {
+    const sessionEmail = (targetEmail || loginEmail || AUTHORIZED_ADMIN_EMAIL).toLowerCase().trim();
+    const matchedSession = sessions.find((s) => s.email.toLowerCase() === sessionEmail);
+    const sessionName = targetName || matchedSession?.name || "Emmanuel Guscul";
+
     setIsSubmittingAuth(true);
     try {
       const res = await lovable.auth.signInWithOAuth("google", {
         redirect_uri: window.location.origin + "/admin",
-        email: AUTHORIZED_ADMIN_EMAIL,
-        name: "Emmanuel Guscul",
+        email: sessionEmail,
+        name: sessionName,
       });
       if (res.error) {
         toast.error("Échec de la validation de session.");
       } else {
-        toast.success(`Session validée pour ${AUTHORIZED_ADMIN_EMAIL} !`);
+        toast.success(`Session validée pour ${sessionName} (${sessionEmail}) !`);
       }
     } catch (e: any) {
       toast.error(e.message || "Erreur lors de l'authentification.");
@@ -242,6 +327,8 @@ export function AdminDashboard() {
       image_url:
         editingProduct.image_url ||
         "https://images.unsplash.com/photo-1615485290382-441e4d049cb5?w=800&q=80",
+      images: Array.isArray(editingProduct.images) ? editingProduct.images : [],
+      video_url: editingProduct.video_url || null,
       active: editingProduct.active ?? true,
       featured: editingProduct.featured ?? false,
       benefits: Array.isArray(editingProduct.benefits)
@@ -334,6 +421,203 @@ export function AdminDashboard() {
     } finally {
       setGeneratingDesc(false);
     }
+  };
+
+  // ----------------------------------------------------
+  // CATEGORIES / SECTIONS CRUD HANDLERS
+  // ----------------------------------------------------
+  const handleSaveCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCategory?.name?.trim()) {
+      toast.error("Le nom de la section / catégorie est obligatoire.");
+      return;
+    }
+
+    const name = editingCategory.name.trim();
+    const slug =
+      editingCategory.slug?.trim() ||
+      name
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "");
+
+    const payload = {
+      name,
+      slug,
+      description: editingCategory.description?.trim() || "",
+      icon: editingCategory.icon || "leaf",
+      sort_order: Number(editingCategory.sort_order || categories.length + 1),
+    };
+
+    try {
+      if (editingCategory.id) {
+        // UPDATE
+        const { error } = await supabase
+          .from("categories")
+          .update(payload)
+          .eq("id", editingCategory.id);
+        if (error) throw error;
+        toast.success(`Section "${payload.name}" mise à jour avec succès !`);
+        setCategories((prev) =>
+          prev.map((c) => (c.id === editingCategory.id ? { ...c, ...payload } : c))
+        );
+      } else {
+        // CREATE
+        const newId = "cat-" + Math.random().toString(36).slice(2, 9);
+        const { error } = await supabase
+          .from("categories")
+          .insert([{ ...payload, id: newId }]);
+        if (error) console.warn("[AdminDashboard] Category insert error:", error);
+        toast.success(`Nouvelle section "${payload.name}" créée avec succès !`);
+        setCategories((prev) => [...prev, { ...payload, id: newId }]);
+      }
+      setCategoryModalOpen(false);
+      setEditingCategory(null);
+    } catch (err: any) {
+      toast.error(err.message || "Erreur lors de l'enregistrement de la section.");
+    }
+  };
+
+  const handleConfirmDeleteCategory = async () => {
+    if (!categoryToDelete) return;
+    try {
+      const { error } = await supabase
+        .from("categories")
+        .delete()
+        .eq("id", categoryToDelete.id);
+      if (error) throw error;
+      setCategories((prev) => prev.filter((c) => c.id !== categoryToDelete.id));
+      toast.success(`Section "${categoryToDelete.name}" supprimée avec succès.`);
+      setCategoryToDelete(null);
+    } catch (err: any) {
+      toast.error("Erreur lors de la suppression de la section.");
+    }
+  };
+
+  // ----------------------------------------------------
+  // SESSIONS & TEAM CRUD HANDLERS
+  // ----------------------------------------------------
+  const handleSaveSession = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSession?.name?.trim() || !editingSession?.email?.trim()) {
+      toast.error("Le nom et l'adresse email de la session sont obligatoires.");
+      return;
+    }
+
+    const email = editingSession.email.trim().toLowerCase();
+    const newSession: AdminSession = {
+      id: editingSession.id || "sess-" + Math.random().toString(36).slice(2, 9),
+      name: editingSession.name.trim(),
+      email,
+      role: (editingSession.role as any) || "admin",
+      createdAt: editingSession.createdAt || new Date().toISOString().split("T")[0],
+      lastActive: "Session active",
+      notes: editingSession.notes?.trim() || "",
+    };
+
+    const updated = editingSession.id
+      ? sessions.map((s) => (s.id === editingSession.id ? newSession : s))
+      : [newSession, ...sessions.filter((s) => s.email.toLowerCase() !== email)];
+
+    setSessions(updated);
+    try {
+      localStorage.setItem("phytocare_admin_sessions", JSON.stringify(updated));
+    } catch {}
+
+    toast.success(`Nouvelle session configurée pour ${newSession.name} (${newSession.email}) !`);
+    setSessionModalOpen(false);
+    setEditingSession(null);
+  };
+
+  const handleDeleteSession = (sess: AdminSession) => {
+    if (sess.email.toLowerCase() === AUTHORIZED_ADMIN_EMAIL.toLowerCase()) {
+      toast.error("Impossible de supprimer la session de l'administrateur principal.");
+      return;
+    }
+    const updated = sessions.filter((s) => s.id !== sess.id);
+    setSessions(updated);
+    try {
+      localStorage.setItem("phytocare_admin_sessions", JSON.stringify(updated));
+    } catch {}
+    toast.success(`Session de "${sess.name}" supprimée.`);
+    setSessionToDelete(null);
+  };
+
+  const handleSwitchToSession = async (sess: AdminSession) => {
+    try {
+      const res = await lovable.auth.signInWithOAuth("google", {
+        redirect_uri: window.location.origin + "/admin",
+        email: sess.email,
+        name: sess.name,
+      });
+      if (!res.error) {
+        toast.success(`Session activée pour ${sess.name} (${sess.email}) !`);
+      }
+    } catch (e: any) {
+      toast.error(e.message || "Erreur de changement de session.");
+    }
+  };
+
+  // ----------------------------------------------------
+  // HOMEPAGE SECTIONS (CMS BUILDER) HANDLERS
+  // ----------------------------------------------------
+  const handleSaveHomeSection = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSection?.title?.trim()) {
+      toast.error("Le titre de la section est obligatoire.");
+      return;
+    }
+
+    if (editingSection.id) {
+      // Update existing section
+      cmsStore.updateSection(editingSection.id, {
+        title: editingSection.title,
+        subtitle: editingSection.subtitle || "",
+        enabled: editingSection.enabled ?? true,
+        data: {
+          ...editingSection.data,
+          tag: editingSection.data?.tag || "Engagement Phytocare",
+          content: editingSection.data?.content || "",
+          imageUrl: editingSection.data?.imageUrl || "",
+          buttonText: editingSection.data?.buttonText || "",
+          buttonLink: editingSection.data?.buttonLink || "",
+        },
+      });
+      toast.success(`Section "${editingSection.title}" mise à jour sur le site !`);
+    } else {
+      // Create new section
+      cmsStore.addSection({
+        type: "custom_content",
+        title: editingSection.title,
+        subtitle: editingSection.subtitle || "",
+        enabled: true,
+        order: cms.sections.length + 1,
+        data: {
+          tag: editingSection.data?.tag || "Nouveau Bloc",
+          content: editingSection.data?.content || "",
+          imageUrl: editingSection.data?.imageUrl || "",
+          buttonText: editingSection.data?.buttonText || "",
+          buttonLink: editingSection.data?.buttonLink || "",
+        },
+      });
+      toast.success(`Nouvelle section "${editingSection.title}" ajoutée à la page d'accueil !`);
+    }
+    setSectionModalOpen(false);
+    setEditingSection(null);
+  };
+
+  const handleToggleHomeSection = (sec: any) => {
+    const newStatus = !sec.enabled;
+    cmsStore.updateSection(sec.id, { enabled: newStatus });
+    toast.success(newStatus ? `Section "${sec.title}" activée sur le site` : `Section "${sec.title}" masquée`);
+  };
+
+  const handleDeleteHomeSection = (sec: any) => {
+    cmsStore.deleteSection(sec.id);
+    toast.success(`Section "${sec.title}" supprimée de la page d'accueil.`);
+    setSectionToDelete(null);
   };
 
   // ----------------------------------------------------
@@ -638,26 +922,34 @@ export function AdminDashboard() {
           {emailAuthMode === "quick" && (
             <div className="space-y-4 text-center">
               <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4 text-xs text-foreground/80 leading-relaxed text-left">
-                <p className="font-bold text-primary mb-1">Authentification vérifiée propriétaire :</p>
-                Validez votre identité en tant que <strong>Emmanuel Guscul</strong> ({AUTHORIZED_ADMIN_EMAIL}) pour
-                accéder immédiatement au panneau de gestion des produits, pages et thèmes.
+                <p className="font-bold text-primary mb-1">Authentification vérifiée propriétaire & gestionnaires :</p>
+                Validez votre identité en un clic avec l'une de vos sessions autorisées pour accéder immédiatement à la gestion du catalogue, des commandes et des thèmes.
               </div>
-              <button
-                type="button"
-                onClick={handleQuickVerifiedAdminSession}
-                disabled={isSubmittingAuth}
-                className="btn-hero w-full py-3 font-semibold disabled:opacity-60 flex items-center justify-center gap-2"
-              >
-                {isSubmittingAuth ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Validation…
-                  </>
-                ) : (
-                  <>
-                    <ShieldCheck className="h-4 w-4" /> Valider session {AUTHORIZED_ADMIN_EMAIL}
-                  </>
-                )}
-              </button>
+
+              <div className="space-y-2">
+                {sessions.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => handleQuickVerifiedAdminSession(s.email, s.name)}
+                    disabled={isSubmittingAuth}
+                    className="w-full rounded-2xl border border-border bg-card p-3 text-left hover:border-primary hover:bg-primary/5 transition flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="grid h-8 w-8 place-items-center rounded-xl bg-primary/10 text-primary font-bold text-xs shrink-0">
+                        {s.name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-foreground leading-tight">{s.name}</p>
+                        <p className="text-[11px] text-muted-foreground">{s.email}</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold text-primary bg-primary/10 rounded-full px-2 py-0.5">
+                      Valider →
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
@@ -727,6 +1019,28 @@ export function AdminDashboard() {
             }`}
           >
             <Package className="h-4 w-4" /> Produits ({products.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab("categories")}
+            className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition whitespace-nowrap ${
+              activeTab === "categories"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+          >
+            <Layers className="h-4 w-4" /> Rayons & Sections ({categories.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab("sessions")}
+            className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition whitespace-nowrap ${
+              activeTab === "sessions"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            }`}
+          >
+            <Users className="h-4 w-4" /> Sessions & Équipe ({sessions.length})
           </button>
 
           <button
@@ -815,6 +1129,8 @@ export function AdminDashboard() {
                     short_description: "",
                     description: "",
                     image_url: "https://images.unsplash.com/photo-1615485290382-441e4d049cb5?w=800&q=80",
+                    images: [],
+                    video_url: "",
                     active: true,
                     featured: false,
                     benefits: [],
@@ -923,6 +1239,16 @@ export function AdminDashboard() {
                             >
                               {prod.active ? "En vente" : "Désactivé"}
                             </span>
+                            {Array.isArray(prod.images) && prod.images.length > 0 && (
+                              <span className="rounded-full bg-slate-950/80 backdrop-blur-md px-2 py-0.5 text-[10px] font-bold text-white shadow-xs">
+                                📸 {prod.images.length + 1} photos
+                              </span>
+                            )}
+                            {prod.video_url && (
+                              <span className="rounded-full bg-amber-500/90 backdrop-blur-md px-2 py-0.5 text-[10px] font-bold text-slate-950 shadow-xs">
+                                🎬 Vidéo
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -1029,6 +1355,450 @@ export function AdminDashboard() {
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ========================================================= */}
+        {/* TAB: SECTIONS & CATÉGORIES CRUD                           */}
+        {/* ========================================================= */}
+        {activeTab === "categories" && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="font-display text-2xl font-bold text-navy dark:text-slate-100 flex items-center gap-2">
+                  <Layers className="h-6 w-6 text-primary" />
+                  <span>Rayons & Sections du Site</span>
+                </h2>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+                  Gérez les rayons de votre catalogue et les sections de présentation de la page d'accueil.
+                </p>
+              </div>
+
+              {sectionsSubTab === "catalog" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingCategory({
+                      name: "",
+                      slug: "",
+                      description: "",
+                      icon: "heart",
+                      sort_order: categories.length + 1,
+                    });
+                    setCategoryModalOpen(true);
+                  }}
+                  className="btn-hero inline-flex items-center gap-2 self-start sm:self-auto"
+                >
+                  <Plus className="h-4 w-4" /> Nouveau Rayon / Section
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingSection({
+                      title: "",
+                      subtitle: "",
+                      data: {
+                        tag: "Nouveau Bloc",
+                        content: "",
+                        imageUrl: "https://images.unsplash.com/photo-1540420773420-3366772f4999?w=900&auto=format&fit=crop&q=80",
+                        buttonText: "Découvrir la boutique",
+                        buttonLink: "/produits",
+                      },
+                    });
+                    setSectionModalOpen(true);
+                  }}
+                  className="btn-hero inline-flex items-center gap-2 self-start sm:self-auto"
+                >
+                  <Plus className="h-4 w-4" /> + Nouvelle Section d'Accueil
+                </button>
+              )}
+            </div>
+
+            {/* Sub-tabs switch */}
+            <div className="flex items-center gap-2 border-b border-border pb-3">
+              <button
+                type="button"
+                onClick={() => setSectionsSubTab("catalog")}
+                className={`rounded-xl px-4 py-2 text-xs font-bold transition flex items-center gap-2 ${
+                  sectionsSubTab === "catalog"
+                    ? "bg-primary text-primary-foreground shadow-xs"
+                    : "bg-card border border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Layers className="h-4 w-4" /> Rayons du Catalogue ({categories.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setSectionsSubTab("homepage")}
+                className={`rounded-xl px-4 py-2 text-xs font-bold transition flex items-center gap-2 ${
+                  sectionsSubTab === "homepage"
+                    ? "bg-primary text-primary-foreground shadow-xs"
+                    : "bg-card border border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Layout className="h-4 w-4" /> Sections de la Page d'Accueil ({cms.sections.length})
+              </button>
+            </div>
+
+            {/* VUE 1 : RAYONS DU CATALOGUE */}
+            {sectionsSubTab === "catalog" && (
+              <div className="space-y-6">
+                {/* Quick Metrics */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className="rounded-2xl border border-border bg-card p-4">
+                    <span className="text-xs font-semibold text-muted-foreground">Total des Rayons</span>
+                    <p className="font-display text-2xl font-extrabold text-navy dark:text-slate-100 mt-1">
+                      {categories.length}
+                    </p>
+                  </div>
+                  <div className="rounded-2xl border border-border bg-card p-4">
+                    <span className="text-xs font-semibold text-muted-foreground">Produits Rattachés</span>
+                    <p className="font-display text-2xl font-extrabold text-primary mt-1">
+                      {products.length}
+                    </p>
+                  </div>
+                  <div className="col-span-2 sm:col-span-1 rounded-2xl border border-border bg-card p-4">
+                    <span className="text-xs font-semibold text-muted-foreground">Statut Catalogue</span>
+                    <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-2 flex items-center gap-1.5">
+                      <CheckCircle2 className="h-4 w-4" /> Synchronisé en direct
+                    </p>
+                  </div>
+                </div>
+
+                {/* Grille des catégories / sections */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {categories.map((cat: any) => {
+                    const linkedCount = products.filter((p) => p.category_id === cat.id).length;
+                    return (
+                      <div
+                        key={cat.id}
+                        className="flex flex-col justify-between rounded-3xl border border-border bg-card p-5 shadow-xs transition hover:border-primary/40 hover:shadow-md"
+                      >
+                        <div className="space-y-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-mint/70 text-primary font-bold shadow-2xs shrink-0">
+                                {cat.icon === "heart" && <Heart className="h-6 w-6 text-rose-600 fill-rose-600/20" />}
+                                {cat.icon === "shield" && <Shield className="h-6 w-6 text-emerald-700" />}
+                                {cat.icon === "zap" && <Zap className="h-6 w-6 text-amber-500 fill-amber-500/20" />}
+                                {cat.icon === "moon" && <Moon className="h-6 w-6 text-indigo-500" />}
+                                {cat.icon === "sparkles" && <Sparkles className="h-6 w-6 text-primary" />}
+                                {cat.icon === "flame" && <Flame className="h-6 w-6 text-orange-500" />}
+                                {cat.icon === "smile" && <Smile className="h-6 w-6 text-sky-500" />}
+                                {(!cat.icon || cat.icon === "leaf") && <Leaf className="h-6 w-6 text-emerald-600" />}
+                              </div>
+                              <div>
+                                <h3 className="font-display font-bold text-base text-navy dark:text-slate-100 leading-snug">
+                                  {cat.name}
+                                </h3>
+                                <span className="text-[11px] font-mono text-muted-foreground block">
+                                  /category/{cat.slug}
+                                </span>
+                              </div>
+                            </div>
+
+                            <span className="rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 text-[10px] font-bold text-muted-foreground shrink-0">
+                              #{cat.sort_order || 1}
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-muted-foreground line-clamp-3 leading-relaxed">
+                            {cat.description || "Aucune description renseignée pour cette section."}
+                          </p>
+                        </div>
+
+                        <div className="mt-4 pt-3 border-t border-border flex items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary">
+                            <Package className="h-3 w-3" /> {linkedCount} produit{linkedCount > 1 ? "s" : ""}
+                          </span>
+
+                          <div className="flex items-center gap-1">
+                            <a
+                              href={`/category/${cat.slug}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="rounded-xl p-2 text-muted-foreground hover:text-foreground hover:bg-muted transition"
+                              title="Voir sur la boutique"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingCategory({ ...cat });
+                                setCategoryModalOpen(true);
+                              }}
+                              className="rounded-xl p-2 text-muted-foreground hover:text-primary hover:bg-primary/10 transition"
+                              title="Modifier cette section"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCategoryToDelete(cat)}
+                              className="rounded-xl p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
+                              title="Supprimer cette section"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* VUE 2 : SECTIONS DE LA PAGE D'ACCUEIL */}
+            {sectionsSubTab === "homepage" && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {cms.sections.map((sec) => (
+                    <div
+                      key={sec.id}
+                      className="flex flex-col justify-between rounded-3xl border border-border bg-card p-5 shadow-xs transition hover:shadow-md"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <span className="inline-block rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-bold text-primary mb-1">
+                              {sec.type}
+                            </span>
+                            <h3 className="font-display font-bold text-base text-navy dark:text-slate-100">
+                              {sec.title}
+                            </h3>
+                            {sec.subtitle && (
+                              <p className="text-xs text-muted-foreground">{sec.subtitle}</p>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleHomeSection(sec)}
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition flex items-center gap-1 ${
+                              sec.enabled
+                                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                                : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                            }`}
+                          >
+                            {sec.enabled ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                            <span>{sec.enabled ? "Visible" : "Masquée"}</span>
+                          </button>
+                        </div>
+
+                        {sec.data?.content && (
+                          <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed bg-muted/30 p-2.5 rounded-xl">
+                            {sec.data.content}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-border flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-muted-foreground">
+                          Position #{sec.order}
+                        </span>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingSection({ ...sec });
+                              setSectionModalOpen(true);
+                            }}
+                            className="rounded-xl p-2 text-muted-foreground hover:text-primary hover:bg-primary/10 transition"
+                            title="Modifier cette section"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          {sec.id.startsWith("sec-custom") && (
+                            <button
+                              type="button"
+                              onClick={() => setSectionToDelete(sec)}
+                              className="rounded-xl p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
+                              title="Supprimer cette section"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================= */}
+        {/* TAB: SESSIONS & ÉQUIPE D'ADMINISTRATION                   */}
+        {/* ========================================================= */}
+        {activeTab === "sessions" && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="font-display text-2xl font-bold text-navy dark:text-slate-100 flex items-center gap-2">
+                  <Users className="h-6 w-6 text-primary" />
+                  <span>Sessions & Comptes d'Accès Admin</span>
+                </h2>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+                  Gérez les sessions autorisées à administrer la boutique Phytocare (ajouter un gestionnaire, un collaborateur ou une nouvelle session).
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingSession({
+                    name: "",
+                    email: "",
+                    role: "admin",
+                    notes: "",
+                  });
+                  setSessionModalOpen(true);
+                }}
+                className="btn-hero inline-flex items-center gap-2 self-start sm:self-auto"
+              >
+                <UserPlus className="h-4 w-4" /> + Nouvelle Session Admin
+              </button>
+            </div>
+
+            {/* Quick Metrics */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <span className="text-xs font-semibold text-muted-foreground">Sessions Actives</span>
+                <p className="font-display text-2xl font-extrabold text-navy dark:text-slate-100 mt-1">
+                  {sessions.length}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <span className="text-xs font-semibold text-muted-foreground">Votre Session Courante</span>
+                <p className="text-xs font-bold text-primary truncate mt-2">
+                  {currentUserEmail || AUTHORIZED_ADMIN_EMAIL}
+                </p>
+              </div>
+              <div className="col-span-2 sm:col-span-1 rounded-2xl border border-border bg-card p-4">
+                <span className="text-xs font-semibold text-muted-foreground">Protection d'Accès</span>
+                <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 mt-2 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4" /> Multi-sessions sécurisées
+                </p>
+              </div>
+            </div>
+
+            {/* Grille des sessions */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {sessions.map((sess) => {
+                const isCurrent = currentUserEmail.toLowerCase() === sess.email.toLowerCase();
+                const isSuper = sess.email.toLowerCase() === AUTHORIZED_ADMIN_EMAIL.toLowerCase();
+
+                return (
+                  <div
+                    key={sess.id}
+                    className={`flex flex-col justify-between rounded-3xl border p-5 shadow-xs transition ${
+                      isCurrent
+                        ? "border-primary bg-primary/5 ring-2 ring-primary/20 shadow-md"
+                        : "border-border bg-card hover:border-primary/40 hover:shadow-md"
+                    }`}
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-primary text-primary-foreground font-bold shadow-2xs shrink-0">
+                            {sess.name.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <h3 className="font-display font-bold text-base text-navy dark:text-slate-100 leading-snug">
+                                {sess.name}
+                              </h3>
+                              {isCurrent && (
+                                <span className="rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold px-2 py-0.5">
+                                  En cours
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-muted-foreground block truncate max-w-[200px]">
+                              {sess.email}
+                            </span>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold shrink-0 ${
+                            sess.role === "super_admin"
+                              ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                              : "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300"
+                          }`}
+                        >
+                          {sess.role === "super_admin"
+                            ? "Super Admin"
+                            : sess.role === "manager"
+                            ? "Gestionnaire"
+                            : sess.role === "support"
+                            ? "Support"
+                            : "Admin"}
+                        </span>
+                      </div>
+
+                      {sess.notes && (
+                        <p className="text-xs text-muted-foreground italic bg-muted/30 p-2.5 rounded-xl">
+                          « {sess.notes} »
+                        </p>
+                      )}
+
+                      <div className="text-[11px] text-muted-foreground space-y-0.5">
+                        <p>Création : {sess.createdAt || "2024-01-01"}</p>
+                        <p className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          {sess.lastActive || "Session active"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-border flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSwitchToSession(sess)}
+                        disabled={isCurrent}
+                        className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition ${
+                          isCurrent
+                            ? "bg-muted text-muted-foreground cursor-default"
+                            : "bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground"
+                        }`}
+                      >
+                        <UserCheck className="h-3.5 w-3.5" />
+                        {isCurrent ? "Session active" : "Activer cette session"}
+                      </button>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingSession({ ...sess });
+                            setSessionModalOpen(true);
+                          }}
+                          className="rounded-xl p-2 text-muted-foreground hover:text-primary hover:bg-primary/10 transition"
+                          title="Modifier la session"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </button>
+                        {!isSuper && (
+                          <button
+                            type="button"
+                            onClick={() => setSessionToDelete(sess)}
+                            className="rounded-xl p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition"
+                            title="Supprimer la session"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -1646,25 +2416,21 @@ export function AdminDashboard() {
                 </div>
               </div>
 
-              {/* Image URL with Uploader */}
-              <div>
-                <label className="block text-xs font-semibold text-muted-foreground mb-1">
-                  Image du produit (URL ou Upload)
-                </label>
-                <div className="space-y-2">
-                  <input
-                    type="url"
-                    value={editingProduct.image_url || ""}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, image_url: e.target.value })}
-                    placeholder="https://..."
-                    className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-xs outline-none focus:border-primary"
-                  />
-                  <ImageUploader
-                    value={editingProduct.image_url || ""}
-                    onChange={(dataUrl: string) => setEditingProduct({ ...editingProduct, image_url: dataUrl })}
-                  />
-                </div>
-              </div>
+              {/* Gestionnaire multi-médias (Jusqu'à 10 photos + Vidéo de démonstration) */}
+              <ProductMediaManager
+                coverImage={editingProduct.image_url || ""}
+                images={Array.isArray(editingProduct.images) ? editingProduct.images : []}
+                videoUrl={editingProduct.video_url || ""}
+                onCoverChange={(newCover) =>
+                  setEditingProduct({ ...editingProduct, image_url: newCover })
+                }
+                onImagesChange={(newImages) =>
+                  setEditingProduct({ ...editingProduct, images: newImages })
+                }
+                onVideoChange={(newVideo) =>
+                  setEditingProduct({ ...editingProduct, video_url: newVideo })
+                }
+              />
 
               {/* AI Description Generator Button */}
               <div className="flex items-center justify-between border-t border-border pt-3">
@@ -1959,6 +2725,579 @@ export function AdminDashboard() {
                 className="rounded-xl bg-destructive px-4 py-2 text-xs font-bold text-destructive-foreground hover:opacity-90"
               >
                 Supprimer la page
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: CREATE / EDIT CATEGORY                             */}
+      {/* ========================================================= */}
+      {categoryModalOpen && editingCategory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-xl rounded-3xl border border-border bg-white dark:bg-slate-900 p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2">
+                <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <Layers className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-display text-lg font-bold text-navy dark:text-slate-100">
+                    {editingCategory.id ? "Modifier le rayon / section" : "Créer une nouvelle section / rayon"}
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Organisez votre catalogue de phytothérapie par besoin de santé
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCategoryModalOpen(false)}
+                className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCategory} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Nom du rayon / section (ex : Santé Intime & Vigueur, Immunité...) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingCategory.name || ""}
+                  onChange={(e) =>
+                    setEditingCategory({
+                      ...editingCategory,
+                      name: e.target.value,
+                      slug:
+                        editingCategory.slug ||
+                        e.target.value
+                          .toLowerCase()
+                          .normalize("NFD")
+                          .replace(/[\u0300-\u036f]/g, "")
+                          .replace(/[^a-z0-9]+/g, "-")
+                          .replace(/(^-|-$)/g, ""),
+                    })
+                  }
+                  placeholder="Ex : Santé Intime & Vigueur"
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none focus:border-primary font-semibold text-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Identifiant web URL : /category/<strong>{editingCategory.slug || "votre-slug"}</strong> *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingCategory.slug || ""}
+                  onChange={(e) =>
+                    setEditingCategory({
+                      ...editingCategory,
+                      slug: e.target.value
+                        .toLowerCase()
+                        .normalize("NFD")
+                        .replace(/[\u0300-\u036f]/g, "")
+                        .replace(/[^a-z0-9-]/g, "-"),
+                    })
+                  }
+                  placeholder="sante-intime"
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-sm font-mono outline-none focus:border-primary text-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Description de la section (affichée aux acheteurs)
+                </label>
+                <textarea
+                  rows={3}
+                  value={editingCategory.description || ""}
+                  onChange={(e) =>
+                    setEditingCategory({
+                      ...editingCategory,
+                      description: e.target.value,
+                    })
+                  }
+                  placeholder="Expliquez en 1 ou 2 phrases ce que propose ce rayon (ex : Plantes stimulantes, libido, équilibre hormonal et vigueur naturelle pour elle et lui)."
+                  className="w-full rounded-xl border border-border bg-background p-3 text-xs outline-none focus:border-primary text-foreground leading-relaxed"
+                />
+              </div>
+
+              {/* Sélecteur d'icône */}
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-2">
+                  Icône visuelle de la section
+                </label>
+                <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+                  {[
+                    { id: "heart", label: "Cœur", icon: Heart, color: "text-rose-600" },
+                    { id: "shield", label: "Bouclier", icon: Shield, color: "text-emerald-700" },
+                    { id: "zap", label: "Énergie", icon: Zap, color: "text-amber-500" },
+                    { id: "leaf", label: "Plantes", icon: Leaf, color: "text-emerald-600" },
+                    { id: "moon", label: "Sommeil", icon: Moon, color: "text-indigo-500" },
+                    { id: "sparkles", label: "Étoiles", icon: Sparkles, color: "text-primary" },
+                    { id: "flame", label: "Flamme", icon: Flame, color: "text-orange-500" },
+                    { id: "smile", label: "Bien-être", icon: Smile, color: "text-sky-500" },
+                  ].map((item) => {
+                    const isSelected = (editingCategory.icon || "leaf") === item.id;
+                    const IconComp = item.icon;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setEditingCategory({ ...editingCategory, icon: item.id })}
+                        className={`flex flex-col items-center justify-center p-2.5 rounded-2xl border transition-all ${
+                          isSelected
+                            ? "border-primary bg-primary/10 ring-2 ring-primary/30"
+                            : "border-border bg-card hover:border-primary/50"
+                        }`}
+                      >
+                        <IconComp className={`h-5 w-5 ${item.color}`} />
+                        <span className="text-[10px] font-bold text-foreground mt-1 truncate max-w-full">
+                          {item.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Ordre d'affichage (position dans le menu et sur l'accueil)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={editingCategory.sort_order || 1}
+                  onChange={(e) =>
+                    setEditingCategory({
+                      ...editingCategory,
+                      sort_order: parseInt(e.target.value) || 1,
+                    })
+                  }
+                  className="w-24 rounded-xl border border-border bg-background px-3.5 py-2 text-sm outline-none focus:border-primary text-foreground font-semibold"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setCategoryModalOpen(false)}
+                  className="rounded-xl border border-border px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:bg-muted"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="btn-hero inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold"
+                >
+                  <Save className="h-4 w-4" /> Enregistrer le rayon
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* CONFIRMATION MODAL: DELETE CATEGORY                       */}
+      {/* ========================================================= */}
+      {categoryToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-2xl space-y-4">
+            <div className="text-center space-y-2">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-destructive/10 text-destructive">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-navy dark:text-slate-100">
+                Supprimer cette section ?
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Êtes-vous sûr de vouloir supprimer le rayon{" "}
+                <strong className="text-foreground">"{categoryToDelete.name}"</strong> ?
+              </p>
+              {products.filter((p) => p.category_id === categoryToDelete.id).length > 0 && (
+                <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-2.5 text-[11px] text-amber-800 dark:text-amber-300 text-left">
+                  ⚠️ <strong>{products.filter((p) => p.category_id === categoryToDelete.id).length} produit(s)</strong> sont associés à cette section. Les produits seront conservés mais ne seront plus liés à ce rayon.
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setCategoryToDelete(null)}
+                className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteCategory}
+                className="rounded-xl bg-destructive px-4 py-2 text-xs font-bold text-destructive-foreground hover:opacity-90"
+              >
+                Supprimer le rayon
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: CREATE / EDIT ADMIN SESSION                        */}
+      {/* ========================================================= */}
+      {sessionModalOpen && editingSession && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-lg rounded-3xl border border-border bg-white dark:bg-slate-900 p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2">
+                <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <UserPlus className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-display text-lg font-bold text-navy dark:text-slate-100">
+                    {editingSession.id ? "Modifier la session admin" : "Ajouter une nouvelle session d'accès"}
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Autorisez un nouveau compte à administrer la boutique Phytocare
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSessionModalOpen(false)}
+                className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSession} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Nom du titulaire de la session *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingSession.name || ""}
+                  onChange={(e) => setEditingSession({ ...editingSession, name: e.target.value })}
+                  placeholder="Ex : Marie Dupont ou Conseiller Phytocare"
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none focus:border-primary font-semibold text-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Adresse email de connexion *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={editingSession.email || ""}
+                  onChange={(e) => setEditingSession({ ...editingSession, email: e.target.value })}
+                  placeholder="nom@exemple.com"
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none focus:border-primary text-foreground font-mono"
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Cette adresse email sera automatiquement reconnue et autorisée à déverrouiller le panneau admin.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Rôle de la session
+                </label>
+                <select
+                  value={editingSession.role || "admin"}
+                  onChange={(e) => setEditingSession({ ...editingSession, role: e.target.value as any })}
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-sm outline-none focus:border-primary text-foreground font-semibold"
+                >
+                  <option value="super_admin">Super Administrateur (Tous les droits)</option>
+                  <option value="admin">Administrateur (Gestion complète boutique & stock)</option>
+                  <option value="manager">Gestionnaire de commandes & logistique</option>
+                  <option value="support">Conseiller clientèle & support WhatsApp</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Notes / Attributions (optionnel)
+                </label>
+                <input
+                  type="text"
+                  value={editingSession.notes || ""}
+                  onChange={(e) => setEditingSession({ ...editingSession, notes: e.target.value })}
+                  placeholder="Ex : Gestion des stocks et expéditions régulières"
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setSessionModalOpen(false)}
+                  className="rounded-xl border border-border px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:bg-muted"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="btn-hero inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold"
+                >
+                  <Save className="h-4 w-4" /> Enregistrer la session
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* CONFIRMATION MODAL: DELETE SESSION                        */}
+      {/* ========================================================= */}
+      {sessionToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-2xl space-y-4">
+            <div className="text-center space-y-2">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-destructive/10 text-destructive">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-navy dark:text-slate-100">
+                Supprimer cette session ?
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Êtes-vous sûr de vouloir révoquer la session de{" "}
+                <strong className="text-foreground">"{sessionToDelete.name}"</strong> ({sessionToDelete.email}) ?
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setSessionToDelete(null)}
+                className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteSession(sessionToDelete)}
+                className="rounded-xl bg-destructive px-4 py-2 text-xs font-bold text-destructive-foreground hover:opacity-90"
+              >
+                Révoquer la session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: CREATE / EDIT HOMEPAGE SECTION                     */}
+      {/* ========================================================= */}
+      {sectionModalOpen && editingSection && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-xl rounded-3xl border border-border bg-white dark:bg-slate-900 p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2">
+                <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <Layout className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-display text-lg font-bold text-navy dark:text-slate-100">
+                    {editingSection.id ? "Modifier la section de page d'accueil" : "Ajouter une nouvelle section à l'accueil"}
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Créez un bloc de mise en avant, d'histoire ou de conseil pour vos visiteurs
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSectionModalOpen(false)}
+                className="rounded-full p-1.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveHomeSection} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Titre principal de la section *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editingSection.title || ""}
+                  onChange={(e) => setEditingSection({ ...editingSection, title: e.target.value })}
+                  placeholder="Ex : Nos engagements pour la pureté botanique"
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2.5 text-sm outline-none focus:border-primary font-semibold text-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Sous-titre / Accroche
+                </label>
+                <input
+                  type="text"
+                  value={editingSection.subtitle || ""}
+                  onChange={(e) => setEditingSection({ ...editingSection, subtitle: e.target.value })}
+                  placeholder="Ex : Une sélection rigoureuse de plantes vivantes et certifiées"
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-sm outline-none focus:border-primary text-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Badge / Tag d'en-tête
+                </label>
+                <input
+                  type="text"
+                  value={editingSection.data?.tag || ""}
+                  onChange={(e) =>
+                    setEditingSection({
+                      ...editingSection,
+                      data: { ...editingSection.data, tag: e.target.value },
+                    })
+                  }
+                  placeholder="Ex : Notre Histoire, Conseil Botanique, Éthique..."
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Texte explicatif & Présentation détaillée
+                </label>
+                <textarea
+                  rows={4}
+                  value={editingSection.data?.content || ""}
+                  onChange={(e) =>
+                    setEditingSection({
+                      ...editingSection,
+                      data: { ...editingSection.data, content: e.target.value },
+                    })
+                  }
+                  placeholder="Rédigez le texte qui apparaîtra dans cette section de la page d'accueil..."
+                  className="w-full rounded-xl border border-border bg-background p-3 text-xs outline-none focus:border-primary text-foreground leading-relaxed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                  Image illustrative (URL Unsplash ou image de plantes)
+                </label>
+                <input
+                  type="url"
+                  value={editingSection.data?.imageUrl || ""}
+                  onChange={(e) =>
+                    setEditingSection({
+                      ...editingSection,
+                      data: { ...editingSection.data, imageUrl: e.target.value },
+                    })
+                  }
+                  placeholder="https://images.unsplash.com/..."
+                  className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-xs font-mono outline-none focus:border-primary text-foreground"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                    Texte du bouton d'action
+                  </label>
+                  <input
+                    type="text"
+                    value={editingSection.data?.buttonText || ""}
+                    onChange={(e) =>
+                      setEditingSection({
+                        ...editingSection,
+                        data: { ...editingSection.data, buttonText: e.target.value },
+                      })
+                    }
+                    placeholder="Ex : Découvrir la boutique"
+                    className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-muted-foreground mb-1">
+                    Lien de redirection
+                  </label>
+                  <input
+                    type="text"
+                    value={editingSection.data?.buttonLink || ""}
+                    onChange={(e) =>
+                      setEditingSection({
+                        ...editingSection,
+                        data: { ...editingSection.data, buttonLink: e.target.value },
+                      })
+                    }
+                    placeholder="Ex : /produits ou /category/sante-intime"
+                    className="w-full rounded-xl border border-border bg-background px-3.5 py-2 text-xs outline-none focus:border-primary text-foreground font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setSectionModalOpen(false)}
+                  className="rounded-xl border border-border px-4 py-2.5 text-xs font-semibold text-muted-foreground hover:bg-muted"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="btn-hero inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold"
+                >
+                  <Save className="h-4 w-4" /> Enregistrer la section d'accueil
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* CONFIRMATION MODAL: DELETE HOMEPAGE SECTION               */}
+      {/* ========================================================= */}
+      {sectionToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-2xl space-y-4">
+            <div className="text-center space-y-2">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-destructive/10 text-destructive">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <h3 className="font-display text-lg font-bold text-navy dark:text-slate-100">
+                Supprimer cette section d'accueil ?
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                Êtes-vous sûr de vouloir supprimer la section{" "}
+                <strong className="text-foreground">"{sectionToDelete.title}"</strong> de la page d'accueil ?
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setSectionToDelete(null)}
+                className="rounded-xl border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteHomeSection(sectionToDelete)}
+                className="rounded-xl bg-destructive px-4 py-2 text-xs font-bold text-destructive-foreground hover:opacity-90"
+              >
+                Supprimer la section
               </button>
             </div>
           </div>

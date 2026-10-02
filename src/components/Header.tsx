@@ -22,9 +22,9 @@ export function Header() {
     { to: "/", label: t("nav.home", "Accueil") },
     { to: "/produits", label: t("nav.shop", "Boutique") },
     { to: "/category/$slug", params: { slug: "immunite" }, label: t("nav.immunity", "Immunité") },
-    { to: "/category/$slug", params: { slug: "stress" }, label: t("nav.stress", "Stress") },
-    { to: "/category/$slug", params: { slug: "sommeil" }, label: t("nav.sleep", "Sommeil") },
+    { to: "/category/$slug", params: { slug: "sante-intime" }, label: "Santé Intime" },
     { to: "/category/$slug", params: { slug: "energie" }, label: t("nav.energy", "Énergie") },
+    { to: "/category/$slug", params: { slug: "sommeil" }, label: t("nav.sleep", "Sommeil") },
   ];
 
   return (
