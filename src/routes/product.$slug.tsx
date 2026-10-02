@@ -1,7 +1,7 @@
 import { createFileRoute, notFound, Link, useNavigate } from "@tanstack/react-router";
-import { queryOptions, useSuspenseQuery } from "@tanstack/react-query";
+import { queryOptions, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { Star, ShoppingCart, Check, MessageCircle } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { cart, formatPrice } from "@/lib/cart";
@@ -20,22 +20,26 @@ const productQO = (slug: string) =>
           .eq("slug", slug)
           .eq("active", true)
           .maybeSingle();
+
         if (!error && data) {
-          const seedMatch = SEED_PRODUCTS.find((sp) => sp.slug === slug);
           return {
             ...data,
-            images: data.images || seedMatch?.images || [],
-            video_url: data.video_url || seedMatch?.video_url || null,
+            // Respecter strictement les photos enregistrées par l'administrateur
+            images: Array.isArray(data.images) ? data.images : [],
+            video_url: data.video_url || null,
           };
         }
       } catch (e) {
-        console.warn("Supabase fetch failed, falling back to seed:", e);
+        console.warn("Supabase fetch notice, falling back to seed:", e);
       }
+
+      // Repli vers les graines initiales uniquement si le produit n'a jamais été chargé
       const found = SEED_PRODUCTS.find((sp) => sp.slug === slug);
       if (found) {
         const cat = SEED_CATEGORIES.find((c) => c.id === found.category_id);
         return {
           ...found,
+          images: Array.isArray(found.images) ? found.images : [],
           categories: cat ? { slug: cat.slug, name: cat.name } : null,
           reviews_count: 24,
         };
@@ -59,27 +63,46 @@ export const Route = createFileRoute("/product/$slug")({
   notFoundComponent: () => (
     <div className="container-page py-20 text-center">
       <h1 className="font-display text-2xl font-bold">Produit introuvable</h1>
-      <Link to="/produits" className="mt-4 inline-block text-primary hover:underline">Retour à la boutique</Link>
+      <Link to="/produits" className="mt-4 inline-block text-primary hover:underline">
+        Retour à la boutique
+      </Link>
     </div>
   ),
   errorComponent: ({ error }: { error: any }) => (
-    <div className="container-page py-20 text-center text-muted-foreground">{(error as any)?.message || "Erreur"}</div>
+    <div className="container-page py-20 text-center text-muted-foreground">
+      {(error as any)?.message || "Erreur"}
+    </div>
   ),
   component: ProductPage,
 });
 
 function ProductPage() {
   const { slug } = Route.useParams();
+  const queryClient = useQueryClient();
   const { data: p } = useSuspenseQuery(productQO(slug));
   const [qty, setQty] = useState(1);
   const navigate = useNavigate();
+
+  // Invalider le cache et rafraîchir immédiatement la fiche produit dès qu'une modification est effectuée dans l'admin
+  useEffect(() => {
+    const handleProductsUpdated = () => {
+      queryClient.invalidateQueries({ queryKey: ["product", slug] });
+    };
+    window.addEventListener("phytocare:products-updated", handleProductsUpdated);
+    return () => window.removeEventListener("phytocare:products-updated", handleProductsUpdated);
+  }, [queryClient, slug]);
+
   if (!p) return null;
 
   const addToCart = () => {
     cart.add(
       {
-        id: p.id, slug: p.slug, name: p.name,
-        price: Number(p.price), currency: p.currency, image_url: p.image_url,
+        id: p.id,
+        slug: p.slug,
+        name: p.name,
+        price: Number(p.price),
+        currency: p.currency,
+        image_url: p.image_url,
       },
       qty,
     );
@@ -106,7 +129,11 @@ function ProductPage() {
         </div>
         <div>
           {p.categories && (
-            <Link to="/category/$slug" params={{ slug: p.categories.slug }} className="text-sm font-semibold uppercase tracking-wide text-primary hover:underline">
+            <Link
+              to="/category/$slug"
+              params={{ slug: p.categories.slug }}
+              className="text-sm font-semibold uppercase tracking-wide text-primary hover:underline"
+            >
               {p.categories.name}
             </Link>
           )}
@@ -118,18 +145,34 @@ function ProductPage() {
           </div>
           <p className="mt-4 text-base text-muted-foreground">{p.short_description}</p>
           <div className="mt-6 flex items-end gap-3">
-            <span className="font-display text-4xl font-extrabold text-navy">{formatPrice(Number(p.price), p.currency)}</span>
+            <span className="font-display text-4xl font-extrabold text-navy">
+              {formatPrice(Number(p.price), p.currency)}
+            </span>
             {p.stock > 0 ? (
-              <span className="text-sm text-primary inline-flex items-center gap-1"><Check className="h-4 w-4" /> En stock</span>
+              <span className="text-sm text-primary inline-flex items-center gap-1">
+                <Check className="h-4 w-4" /> En stock
+              </span>
             ) : (
-              <span className="text-sm text-destructive">Rupture</span>
+              <span className="text-sm text-destructive">Rupture de stock</span>
             )}
           </div>
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <div className="inline-flex items-center rounded-full border border-border">
-              <button type="button" onClick={() => setQty((q) => Math.max(1, q - 1))} className="h-11 w-11 text-lg">−</button>
+              <button
+                type="button"
+                onClick={() => setQty((q) => Math.max(1, q - 1))}
+                className="h-11 w-11 text-lg"
+              >
+                −
+              </button>
               <span className="w-10 text-center font-semibold">{qty}</span>
-              <button type="button" onClick={() => setQty((q) => q + 1)} className="h-11 w-11 text-lg">+</button>
+              <button
+                type="button"
+                onClick={() => setQty((q) => q + 1)}
+                className="h-11 w-11 text-lg"
+              >
+                +
+              </button>
             </div>
             <button type="button" onClick={addToCart} className="btn-hero flex-1 sm:flex-none">
               <ShoppingCart className="h-4 w-4" /> Ajouter au panier
@@ -138,30 +181,30 @@ function ProductPage() {
               href={buildWhatsAppConsultationLink(p.name)}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300 dark:border-emerald-800 bg-emerald-50/80 dark:bg-emerald-950/40 px-4 py-2.5 text-xs font-semibold text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 transition"
-              title="Demander conseil à un herboriste avant de commander"
+              className="inline-flex items-center gap-2 rounded-full border border-emerald-600/30 bg-emerald-50 px-5 py-3 text-xs sm:text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800/40"
             >
-              <MessageCircle className="h-4 w-4 text-[#25D366]" />
-              Conseil Herboriste WhatsApp
+              <MessageCircle className="h-4 w-4 text-emerald-600" /> Poser une question à l'herboriste
             </a>
           </div>
 
-          {p.description && (
-            <div className="mt-8">
-              <h2 className="font-display text-lg font-bold text-navy">Description</h2>
-              <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">{p.description}</p>
+          <div className="mt-8 border-t border-border pt-6 space-y-4">
+            <h2 className="font-display text-lg font-bold text-navy">Description & Utilisation</h2>
+            <div className="prose prose-sm text-muted-foreground whitespace-pre-line leading-relaxed">
+              {p.description}
             </div>
-          )}
-          {p.benefits && (
-            <div className="mt-6">
-              <h2 className="font-display text-lg font-bold text-navy">Bienfaits</h2>
-              <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">{p.benefits}</p>
-            </div>
-          )}
-          {p.usage && (
-            <div className="mt-6">
-              <h2 className="font-display text-lg font-bold text-navy">Mode d'utilisation</h2>
-              <p className="mt-2 whitespace-pre-line text-sm text-muted-foreground">{p.usage}</p>
+          </div>
+
+          {p.benefits && p.benefits.length > 0 && (
+            <div className="mt-6 rounded-2xl bg-mint/30 p-5 border border-primary/20">
+              <h3 className="font-display text-base font-bold text-navy mb-3">Bienfaits & Propriétés</h3>
+              <ul className="grid gap-2 text-sm text-foreground/90">
+                {p.benefits.map((b: string, i: number) => (
+                  <li key={i} className="flex items-start gap-2">
+                    <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                    <span>{b}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>

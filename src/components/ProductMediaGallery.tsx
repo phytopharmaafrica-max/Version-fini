@@ -53,8 +53,23 @@ export function ProductMediaGallery({
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
+  const [autoRotate, setAutoRotate] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Synchroniser l'index si la photo principale ou la liste change
+  useEffect(() => {
+    setActiveImageIndex(0);
+  }, [coverImage, allImages.length]);
+
+  // Défilement automatique fluide des photos
+  useEffect(() => {
+    if (!autoRotate || activeType !== "image" || allImages.length <= 1) return;
+    const timer = setInterval(() => {
+      setActiveImageIndex((prev) => (prev + 1) % allImages.length);
+    }, 3800);
+    return () => clearInterval(timer);
+  }, [autoRotate, activeType, allImages.length]);
 
   // Helper to determine if videoUrl is a YouTube or Vimeo embed
   const isEmbedVideo = (url: string) => {

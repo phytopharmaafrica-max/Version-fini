@@ -36,7 +36,7 @@ const featuredQO = queryOptions({
   queryFn: async () => {
     const { data, error } = await supabase
       .from("products")
-      .select("id, slug, name, short_description, price, currency, image_url, badge, rating")
+      .select("id, slug, name, short_description, price, currency, image_url, images, badge, rating")
       .eq("active", true)
       .eq("featured", true)
       .order("created_at", { ascending: false })
@@ -63,7 +63,7 @@ const newestQO = queryOptions({
   queryFn: async () => {
     const { data, error } = await supabase
       .from("products")
-      .select("id, slug, name, short_description, price, currency, image_url, badge, rating")
+      .select("id, slug, name, short_description, price, currency, image_url, images, badge, rating")
       .eq("active", true)
       .order("created_at", { ascending: false })
       .limit(4);

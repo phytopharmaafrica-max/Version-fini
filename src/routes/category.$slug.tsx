@@ -17,7 +17,7 @@ const catQO = (slug: string) =>
         if (!error && cat) {
           const { data: products, error: e2 } = await supabase
             .from("products")
-            .select("id, slug, name, short_description, price, currency, image_url, badge, rating")
+            .select("id, slug, name, short_description, price, currency, image_url, images, badge, rating")
             .eq("active", true)
             .eq("category_id", cat.id)
             .order("created_at", { ascending: false });

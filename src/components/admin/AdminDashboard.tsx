@@ -351,6 +351,7 @@ export function AdminDashboard() {
           const updated = prev.map((p) => (p.id === editingProduct.id ? { ...p, ...payload } : p));
           try {
             localStorage.setItem("phytocare_products", JSON.stringify(updated));
+            window.dispatchEvent(new CustomEvent("phytocare:products-updated", { detail: updated }));
           } catch {}
           return updated;
         });
@@ -367,6 +368,7 @@ export function AdminDashboard() {
           const updated = [newProduct, ...prev];
           try {
             localStorage.setItem("phytocare_products", JSON.stringify(updated));
+            window.dispatchEvent(new CustomEvent("phytocare:products-updated", { detail: updated }));
           } catch {}
           return updated;
         });
